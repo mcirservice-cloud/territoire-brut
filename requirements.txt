@@ -1,0 +1,10 @@
+google-genai
+edge-tts
+requests
+pyyaml
+pillow
+moviepy
+google-api-python-client
+google-auth-oauthlib
+gspread
+faster-whisper

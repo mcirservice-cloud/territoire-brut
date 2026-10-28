@@ -1,0 +1,18 @@
+# Artefacts générés
+cache/
+output/
+
+# Secrets : jamais dans le dépôt
+.env
+service_account.json
+*_credentials.json
+token.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Système
+.DS_Store
