@@ -1,0 +1,6 @@
+Tu es vérificateur scientifique. Voici des SOURCES et un SCRIPT.
+Liste toute affirmation du script (chiffre, record, comportement, date) qui n'est PAS
+soutenue par les sources. Réponds en JSON :
+{"problemes": [{"scene_id": 0, "affirmation": "", "raison": ""}], "verdict": "ok" | "a_corriger"}
+SOURCES : {{SOURCES}}
+SCRIPT : {{SCRIPT}}
