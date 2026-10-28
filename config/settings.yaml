@@ -1,0 +1,61 @@
+# Paramètres du pipeline « Territoire Brut »
+# Tous les secrets (clés API, identifiants YouTube) sont lus depuis les
+# variables d'environnement : JAMAIS de clé dans ce fichier.
+
+chaine:
+  nom: "Territoire Brut"
+  langue: "fr"
+  categorie_youtube: 15  # Animaux (Pets & Animals)
+
+voix:
+  moteur: "edge-tts"
+  voix: "fr-FR-HenriNeural"
+  rate: "-5%"
+  pitch: "-2Hz"
+  pause_entre_scenes_s: 0.4
+
+video:
+  largeur: 1920
+  hauteur: 1080
+  fps: 25
+  codec: "libx264"
+  preset: "fast"
+
+script:
+  modele_gemini: "gemini-2.5-flash"
+  temperature: 0.7
+  essais_max: 3
+  mots_par_minute: 150
+  faits_max_caracteres: 9000
+  duree_scene_min_s: 4
+  duree_scene_max_s: 12
+  part_max_clip_ia: 0.2
+
+fact_check:
+  modele_groq: "llama-3.1-8b-instant"
+
+visuels:
+  priorite: "pixabay"  # Pixabay en priorité : les nouvelles clés Pexels sont en pause
+  secours: "pexels"
+  largeur_min_px: 1280
+  requetes_max_par_scene: 1
+  reutilisation_interdite_nb_videos: 5  # ne pas réutiliser un clip dans les 5 dernières vidéos
+
+audio:
+  musique_volume: 0.35
+  ambiance_volume: 0.25
+  loudnorm: "I=-16:TP=-1.5:LRA=11"
+
+publication:
+  # Mode relecture par défaut : vidéo privée + planifiée, artefact archivé 3 jours.
+  privacy_status: "private"
+  delai_publication_heures: 2  # publishAt = fin du run + ce délai
+  contient_media_synthetique: true
+  shorts_par_video: 3
+  duree_short_min_s: 25
+  duree_short_max_s: 45
+
+dossiers:
+  cache: "cache"
+  sortie: "output"
+  sujets_csv: "topics.csv"
