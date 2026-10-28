@@ -1,0 +1,52 @@
+name: Produire et publier une vidéo
+
+on:
+  schedule:
+    - cron: "0 5 * * *"     # 05:00 UTC (vidéo du matin)
+    - cron: "0 14 * * *"    # 14:00 UTC (vidéo de l'après-midi)
+  workflow_dispatch:         # lancement manuel possible
+
+jobs:
+  produce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Installer FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
+
+      - name: Dépendances Python
+        run: pip install -r requirements.txt
+
+      - name: Cache clips et sons
+        uses: actions/cache@v4
+        with:
+          path: cache
+          key: assets-${{ github.run_id }}
+          restore-keys: assets-
+
+      - name: Produire la vidéo
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          PEXELS_KEY: ${{ secrets.PEXELS_KEY }}
+          PIXABAY_KEY: ${{ secrets.PIXABAY_KEY }}
+          FREESOUND_KEY: ${{ secrets.FREESOUND_KEY }}
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+        run: python src/main.py
+
+      - name: Archiver la vidéo (relecture humaine)
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-${{ github.run_id }}
+          path: output/
+          retention-days: 3
