@@ -9,6 +9,7 @@ Les scènes problématiques sont marquées "a_verifier": true dans le script.
 
 import json
 import os
+import time
 
 import requests
 
@@ -27,14 +28,25 @@ def fact_check(script, sources, modele_prompt):
     prompt = (modele_prompt
               .replace("{{SOURCES}}", sources)
               .replace("{{SCRIPT}}", json.dumps(script, ensure_ascii=False)))
-    r = requests.post(
-        URL,
-        params={"key": cle},
-        headers={"Content-Type": "application/json"},
-        json={"contents": [{"parts": [{"text": prompt}]}],
-              "generationConfig": {"temperature": 0.0,
-                                   "responseMimeType": "application/json"}},
-        timeout=120)
+    delais = [30, 60, 120]
+    r = None
+    for tentative in range(1, len(delais) + 2):
+        r = requests.post(
+            URL,
+            params={"key": cle},
+            headers={"Content-Type": "application/json"},
+            json={"contents": [{"parts": [{"text": prompt}]}],
+                  "generationConfig": {"temperature": 0.0,
+                                       "responseMimeType": "application/json"}},
+            timeout=120)
+        if r.status_code in (429, 500, 502, 503, 504) and tentative <= len(delais):
+            attente = delais[tentative - 1]
+            print(f"[fact-check] Gemini surchargé (HTTP {r.status_code}), "
+                  f"nouvel essai dans {attente}s "
+                  f"(tentative {tentative}/{len(delais) + 1})")
+            time.sleep(attente)
+            continue
+        break
     r.raise_for_status()
     contenu = r.json()["candidates"][0]["content"]["parts"][0]["text"]
     resultat = json.loads(contenu)

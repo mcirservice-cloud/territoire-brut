@@ -11,6 +11,7 @@ Validation structurelle avant acceptation :
 
 import json
 import os
+import time
 
 MODEL = "gemini-3.8-flash"
 TEMPERATURE = 0.7
@@ -91,6 +92,30 @@ def construire_prompt(modele_prompt, sujet, faits, sfx, ambiances):
     return prompt
 
 
+def _appeler_gemini(client, prompt_courant):
+    """Appelle Gemini avec réessais sur les surcharges temporaires
+    (503/429) : une pointe de demande ne doit pas tuer le run."""
+    delais = [30, 60, 120]
+    for tentative in range(1, len(delais) + 2):
+        try:
+            return client.models.generate_content(
+                model=MODEL, contents=prompt_courant,
+                config={"response_mime_type": "application/json",
+                        "temperature": TEMPERATURE})
+        except Exception as e:
+            message = str(e)
+            transitoire = any(code in message for code in
+                              ("503", "429", "UNAVAILABLE",
+                               "RESOURCE_EXHAUSTED"))
+            if not transitoire or tentative > len(delais):
+                raise
+            attente = delais[tentative - 1]
+            print(f"[script] Gemini surchargé, nouvel essai dans {attente}s "
+                  f"(tentative {tentative}/{len(delais) + 1})")
+            time.sleep(attente)
+    raise RuntimeError("Échec Gemini après réessais")
+
+
 def generate_script(prompt, sfx_autorises=None, ambiances_autorisees=None,
                     essais=ESSAIS_MAX):
     """Appelle Gemini en mode JSON jusqu'à obtenir un script valide."""
@@ -106,10 +131,7 @@ def generate_script(prompt, sfx_autorises=None, ambiances_autorisees=None,
     prompt_courant = prompt
     derniere_erreur = None
     for essai in range(1, essais + 1):
-        resp = client.models.generate_content(
-            model=MODEL, contents=prompt_courant,
-            config={"response_mime_type": "application/json",
-                    "temperature": TEMPERATURE})
+        resp = _appeler_gemini(client, prompt_courant)
         try:
             data = json.loads(resp.text)
             validate(data, sfx_autorises, ambiances_autorisees)
