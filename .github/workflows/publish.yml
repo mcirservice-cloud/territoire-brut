@@ -33,6 +33,7 @@ jobs:
 
       - name: Produire la vidéo
         env:
+          PYTHONUNBUFFERED: "1"  # ceinture + bretelles avec « python -u »
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
