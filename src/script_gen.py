@@ -13,6 +13,11 @@ Validation structurelle avant acceptation :
 - jamais deux animations identiques consécutives
 - clés sfx / ambiances uniquement dans les bibliothèques autorisées
 - durées de scène entre 4 et 12 secondes
+Correction auto (run #10) : ce qui est corrigeable est corrigé au lieu
+de rejeter tout le script — animation répétée changée, sfx inconnu
+supprimé ou déplacé vers ambiance si c'est une ambiance connue
+(ex. desert_vent), durée ramenée à la borne, clip_ia en trop converti.
+Seuls restent bloquants : JSON invalide, aucune scène, meta.titre manquant.
 3 essais maximum, puis échec propre.
 """
 
@@ -83,6 +88,89 @@ def validate(data, sfx_autorises=None, ambiances_autorisees=None,
     return True
 
 
+ANIMATIONS_CORRECTION = [
+    "ken_burns_zoom_in",
+    "ken_burns_zoom_out",
+    "travelling_gauche",
+    "travelling_droite",
+    "parallaxe",
+    "clip_ia",
+]
+
+
+def corriger_script(data, sfx_autorises=None, ambiances_autorisees=None):
+    """Corrige ce qui est corrigeable, sans rejeter tout le script.
+
+    Renvoie (corrections, erreurs_bloquantes). Les erreurs bloquantes
+    restent : aucune scène, meta.titre manquant, trop de clip_ia même
+    après conversion. Tout le reste est corrigé et journalisé.
+    """
+    corrections = []
+    erreurs = []
+    scenes = data.get("scenes") if isinstance(data, dict) else None
+    if not scenes:
+        return corrections, ["aucune scène dans le script"]
+    if "meta" not in data or "titre" not in data.get("meta", {}):
+        erreurs.append("métadonnées (meta.titre) manquantes")
+
+    for i, s in enumerate(scenes, start=1):
+        if s.get("id") != i:
+            corrections.append(f"scène renumérotée en {i} (était {s.get('id')})")
+            s["id"] = i
+
+    nb_ia = sum(s.get("animation") == "clip_ia" for s in scenes)
+    max_ia = int(len(scenes) * 0.2)
+    if nb_ia > max_ia:
+        reste = nb_ia - max_ia
+        for s in scenes:
+            if reste <= 0:
+                break
+            if s.get("animation") == "clip_ia" and s.get("phase") not in ("accroche", "climax"):
+                s["animation"] = "ken_burns_zoom_in"
+                reste -= 1
+                corrections.append(f"scène {s['id']} : clip_ia en trop -> ken_burns_zoom_in")
+        if reste > 0:
+            erreurs.append(f"trop de clips IA même après correction : {nb_ia}/{len(scenes)}")
+
+    precedent = None
+    for s in scenes:
+        anim = s.get("animation")
+        if anim == precedent:
+            nouveau = next((a for a in ANIMATIONS_CORRECTION if a != precedent and a != "clip_ia"), "ken_burns_zoom_out")
+            corrections.append(f"scène {s['id']} : animation répétée {anim} -> {nouveau}")
+            s["animation"] = nouveau
+            anim = nouveau
+        precedent = anim
+
+        duree = s.get("duree_estimee_s", 0)
+        if duree < 4:
+            s["duree_estimee_s"] = 4
+            corrections.append(f"scène {s['id']} : durée {duree}s -> 4s")
+        elif duree > 12:
+            s["duree_estimee_s"] = 12
+            corrections.append(f"scène {s['id']} : durée {duree}s -> 12s")
+
+        if sfx_autorises is not None:
+            gardes = []
+            for sfx in s.get("sfx", []):
+                cle = sfx.get("cle")
+                if cle in sfx_autorises:
+                    gardes.append(sfx)
+                elif ambiances_autorisees is not None and cle in ambiances_autorisees and not s.get("ambiance"):
+                    s["ambiance"] = cle
+                    corrections.append(f"scène {s['id']} : « {cle} » déplacé de sfx vers ambiance")
+                else:
+                    corrections.append(f"scène {s['id']} : sfx inconnu « {cle} » supprimé")
+            s["sfx"] = gardes
+
+        if ambiances_autorisees is not None and s.get("ambiance"):
+            if s["ambiance"] not in ambiances_autorisees:
+                corrections.append(f"scène {s['id']} : ambiance inconnue « {s['ambiance']} » supprimée")
+                s["ambiance"] = None
+
+    return corrections, erreurs
+
+
 def construire_prompt(modele_prompt, sujet, faits, sfx, ambiances):
     """Remplit les {{variables}} du prompt maître."""
     remplacements = {
@@ -124,17 +212,33 @@ def generate_script(prompt, sfx_autorises=None, ambiances_autorisees=None,
     derniere_erreur = None
     for essai in range(1, essais + 1):
         texte = _generer_texte(prompt_courant, config)
+        data = None
         try:
             data = charger_json(texte)
             validate(data, sfx_autorises, ambiances_autorisees)
             return data
         except (ValueError, ScriptInvalide) as e:
-            # ValueError couvre JSONDecodeError + extraction JSON impossible :
-            # une réponse non-JSON compte comme un essai invalide, pas un crash.
             derniere_erreur = e
             print(f"[script] Essai {essai}/{essais} invalide : {e}")
+            # Correction auto : si le JSON a été lu, on corrige ce qui
+            # est corrigeable et on revérifie avant de gaspiller un essai.
+            if data is not None:
+                corrections, bloquantes = corriger_script(
+                    data, sfx_autorises, ambiances_autorisees)
+                if corrections:
+                    print(f"[script] Correction auto : {'; '.join(corrections)}")
+                if not bloquantes:
+                    try:
+                        validate(data, sfx_autorises, ambiances_autorisees)
+                        print(f"[script] Script corrigé et accepté à l'essai {essai}/{essais}.")
+                        return data
+                    except (ValueError, ScriptInvalide) as e2:
+                        derniere_erreur = e2
+                        print(f"[script] Après correction, toujours invalide : {e2}")
+                else:
+                    derniere_erreur = "; ".join(bloquantes)
             prompt_courant = prompt + (
-                f"\n\nERREUR PRÉCÉDENTE : {e}. "
+                f"\n\nERREUR PRÉCÉDENTE : {derniere_erreur}. "
                 "Corrige et renvoie un JSON valide.")
     raise RuntimeError(
         f"Script invalide après {essais} essais "
