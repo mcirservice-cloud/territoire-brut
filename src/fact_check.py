@@ -1,4 +1,4 @@
-"""Fact-check du script avec Gemini (gemini-2.5-flash).
+"""Fact-check du script avec Gemini (gemini-3.0-flash).
 
 Le robot Varus n'a plus besoin de Groq : la même clé Gemini qui écrit
 le script vérifie aussi les faits. Un seul petit appel : on compare
@@ -12,7 +12,7 @@ import os
 
 import requests
 
-MODELE = "gemini-2.5-flash"
+MODELE = "gemini-3.0-flash"
 URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
        f"{MODELE}:generateContent")
 

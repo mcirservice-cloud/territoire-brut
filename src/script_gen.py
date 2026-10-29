@@ -1,4 +1,4 @@
-"""Génération du script JSON avec Gemini (gemini-2.5-flash, mode JSON).
+"""Génération du script JSON avec Gemini (gemini-3.0-flash, mode JSON).
 
 Validation structurelle avant acceptation :
 - ids de scènes continus (1..N)
@@ -12,7 +12,7 @@ Validation structurelle avant acceptation :
 import json
 import os
 
-MODEL = "gemini-2.5-flash"
+MODEL = "gemini-3.0-flash"
 TEMPERATURE = 0.7
 ESSAIS_MAX = 3
 PART_MAX_CLIP_IA = 0.2
