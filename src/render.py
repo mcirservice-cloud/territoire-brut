@@ -28,16 +28,22 @@ def generer_srt(scenes, sortie):
 
 
 def assembler(segments, audio, sortie, sous_titres=None):
-    """Concatène les segments vidéo et ajoute l'audio (+ sous-titres)."""
+    """Concatène les segments vidéo et ajoute l'audio (+ sous-titres).
+
+    Amélioration HD gratuite (filtres FFmpeg, sans GPU) appliquée au
+    montage final : léger débruitage (hqdn3d), renforcement de la netteté
+    (unsharp) et mise à l'échelle 1080p en lanczos.
+    """
     liste = sortie + ".txt"
     with open(liste, "w", encoding="utf-8") as f:
         for seg in segments:
             f.write(f"file '{os.path.abspath(seg)}'\n")
-    cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", liste,
-           "-i", audio, "-c:v", "libx264", "-preset", "fast",
-           "-c:a", "aac", "-b:a", "192k", "-shortest"]
+    filtres = "hqdn3d,unsharp,scale=1920:1080:flags=lanczos"
     if sous_titres:
-        cmd += ["-vf", f"subtitles={sous_titres}:force_style='FontSize=22'"]
+        filtres += f",subtitles={sous_titres}:force_style='FontSize=22'"
+    cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", liste,
+           "-i", audio, "-vf", filtres, "-c:v", "libx264", "-preset", "fast",
+           "-c:a", "aac", "-b:a", "192k", "-shortest"]
     cmd += ["-movflags", "+faststart", sortie]
     subprocess.run(cmd, check=True)
     return sortie

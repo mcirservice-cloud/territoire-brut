@@ -34,7 +34,7 @@ CLES_REQUISES = ["GEMINI_API_KEY",
 
 def charger_parametres():
     """Lit config/settings.yaml (valeurs par défaut si PyYAML absent)."""
-    defauts = {"voix": {"voix": "fr-FR-HenriNeural"},
+    defauts = {"voix": {"moteur": "kokoro", "voix": "ff_siwis"},
                "publication": {"privacy_status": "private",
                                "delai_publication_heures": 2},
                "dossiers": {"cache": "cache", "sortie": "output"}}
@@ -257,7 +257,8 @@ def run(sujet_nom=None, sans_upload=False):
               encoding="utf-8") as f:
         json.dump({"sujet": sujet, "sources": meta.get("sources", []),
                    "assets": credits_assets,
-                   "voix": "edge-tts fr-FR-HenriNeural",
+                   "voix": (f"{(parametres.get('voix') or {}).get('moteur', 'kokoro')} "
+                            f"{(parametres.get('voix') or {}).get('voix', 'ff_siwis')}"),
                    "contenu_ia": True}, f, ensure_ascii=False, indent=2)
 
     # 12-13. Shorts + publication (privée / planifiée)

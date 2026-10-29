@@ -1,21 +1,19 @@
-"""Fact-check du script avec Gemini (gemini-3.8-flash).
+"""Fact-check du script avec la chaîne LLM (Gemini puis secours).
 
 Le robot Varus n'a plus besoin de Groq : la même clé Gemini qui écrit
-le script vérifie aussi les faits. Un seul petit appel : on compare
-le script aux sources factuelles.
+le script vérifie aussi les faits, avec DeepSeek et OpenRouter en secours
+(voir src/llm_chain.py). Un seul petit appel : on compare le script aux
+sources factuelles.
 Verdict : "ok" ou "a_corriger" + liste des problèmes par scène.
 Les scènes problématiques sont marquées "a_verifier": true dans le script.
 """
 
 import json
 import os
-import time
 
-import requests
+from llm_chain import appeler_chaine, charger_json
 
-MODELE = "gemini-3.8-flash"
-URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
-       f"{MODELE}:generateContent")
+MODELE = "gemini-3.8-flash"  # conservé pour compatibilité (1er de la chaîne)
 
 
 def fact_check(script, sources, modele_prompt):
@@ -28,28 +26,8 @@ def fact_check(script, sources, modele_prompt):
     prompt = (modele_prompt
               .replace("{{SOURCES}}", sources)
               .replace("{{SCRIPT}}", json.dumps(script, ensure_ascii=False)))
-    delais = [30, 60, 120]
-    r = None
-    for tentative in range(1, len(delais) + 2):
-        r = requests.post(
-            URL,
-            params={"key": cle},
-            headers={"Content-Type": "application/json"},
-            json={"contents": [{"parts": [{"text": prompt}]}],
-                  "generationConfig": {"temperature": 0.0,
-                                       "responseMimeType": "application/json"}},
-            timeout=120)
-        if r.status_code in (429, 500, 502, 503, 504) and tentative <= len(delais):
-            attente = delais[tentative - 1]
-            print(f"[fact-check] Gemini surchargé (HTTP {r.status_code}), "
-                  f"nouvel essai dans {attente}s "
-                  f"(tentative {tentative}/{len(delais) + 1})")
-            time.sleep(attente)
-            continue
-        break
-    r.raise_for_status()
-    contenu = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-    resultat = json.loads(contenu)
+    contenu = appeler_chaine(prompt, 0.0, cle)
+    resultat = charger_json(contenu)
     if resultat.get("verdict") not in ("ok", "a_corriger"):
         resultat["verdict"] = "a_corriger" if resultat.get("problemes") else "ok"
     return resultat
