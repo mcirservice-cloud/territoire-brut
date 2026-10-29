@@ -35,20 +35,33 @@ script:
 
 fact_check:
   modele_gemini: "gemini-3.8-flash"  # la même clé Gemini que le script
+  correction_max_tentatives: 2  # boucle de correction BORNÉE : après
+  # 2 tentatives, publication BLOQUÉE mais tout sauvegardé (blocage.json)
 
 llm_chaine:
-  # Chaîne de secours pour le scénario et le fact-check (règle : chaque
+  # Chaîne LLM pour le scénario et le fact-check (règle : chaque
   # tâche a au moins deux alternatives). Le premier fournisseur qui répond
   # gagne ; une couche sans clé est ignorée (log, pas d'erreur).
+  # GÉNÉRATION du script (depuis le remplacement de Gemini, 2026-10-29) :
+  # OpenRouter gratuit d'abord, puis DeepSeek, puis Gemini REST borné en
+  # dernier recours uniquement (aucun appel SDK sans limite).
+  # RÉFLEXION (fact-check / correction) : DeepSeek d'abord, puis Gemini
+  # REST borné, puis OpenRouter gratuit.
   # Aucune clé ici : elles viennent des variables d'environnement.
   gemini_modeles:
     - "gemini-3.8-flash"
-    - "gemini-3.5-flash"  # même clé GEMINI_API_KEY, autre modèle
+    - "gemini-3.5-flash"  # même clé GEMINI_API_KEY, autre modèle ; dernier recours génération
   deepseek_modele: "deepseek-chat"  # clé DEEPSEEK_API_KEY
-  openrouter_modele_payant: "z-ai/glm-5.3-flash"  # clé OPENROUTER_API_KEY ; très bon marché (prix officiel Z.ai ~0,15 $/M entrée, 0,50 $/M sortie)
+  deepseek_modele_reflexion: "deepseek-chat"  # réflexion (fact-check /
+  # correction) : DeepSeek d'abord, puis Gemini, puis OpenRouter gratuit.
+  # "deepseek-reasoner" accepté ici, mais plus lent et plus cher :
+  # ne PAS en faire le défaut.
+  openrouter_modele_payant: "z-ai/glm-5.3-flash"  # clé OPENROUTER_API_KEY ; conservé en configuration mais HORS du chemin de génération (choix gratuit : OpenRouter gratuit d'abord, Gemini borné ensuite)
   openrouter_modeles_gratuits:
     - "google/gemma-4-31b-it:free"  # gratuit, mais le catalogue :free change souvent
   openrouter_secours_auto: "openrouter/free"  # routeur gratuit automatique, dernier recours
+  openrouter_modele_generation: "google/gemma-4-31b-it:free"  # génération du script : OpenRouter GRATUIT en premier (moteur principal, remplace Gemini)
+  openrouter_timeout_s: 300  # timeout par requête OpenRouter pour la génération (au-delà : repli suivant, jamais de blocage)
   delais_reessai_s: [30, 60, 120]  # réessais sur erreurs temporaires (429/5xx)
 
 visuels:
@@ -57,6 +70,13 @@ visuels:
   largeur_min_px: 1280
   requetes_max_par_scene: 1
   reutilisation_interdite_nb_videos: 5  # ne pas réutiliser un clip dans les 5 dernières vidéos
+  budget_scene_s: 300  # plafond de recherche par scène (au-delà : échec
+  # rapide avec message clair, au lieu de brûler le budget du job)
+
+validation_frames:
+  echantillons: 8  # frames échantillonnées sur la vidéo finale
+  seuil_noir: 8  # luminance moyenne < 8 = frame quasi noire
+  proportion_max_noires: 0.8  # au-delà : rendu considéré invalide
 
 audio:
   musique_volume: 0.35
