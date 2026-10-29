@@ -1,5 +1,5 @@
 google-genai
-edge-tts
+kokoro
 requests
 pyyaml
 pillow

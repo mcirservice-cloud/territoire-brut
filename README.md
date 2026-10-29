@@ -18,8 +18,9 @@ Chaîne YouTube de documentaires animaliers en français, **100 % automatisée**
    identiques consécutives, clés de sons autorisées uniquement).
 4. **Vérification** — Groq (`llama-3.1-8b-instant`) compare le script
    aux sources. Toute scène marquée `a_verifier` **bloque** la publication.
-5. **Voix** — edge-tts, voix `fr-FR-HenriNeural`. La durée réelle de la
-   voix fixe la durée de chaque scène (synchronisation automatique).
+5. **Voix** — Kokoro TTS (open source, Apache 2.0), voix française
+   `ff_siwis`. La durée réelle de la voix fixe la durée de chaque
+   scène (synchronisation automatique).
 6. **Visuels** — Pixabay **en priorité** (les nouvelles clés Pexels sont
    en pause), Pexels en secours ; Freesound filtré CC0, Xeno-canto
    sans clé. Cache local + journal d'usage : un clip n'est pas
