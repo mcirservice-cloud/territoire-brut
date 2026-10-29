@@ -34,24 +34,23 @@ Chaîne YouTube de documentaires animaliers en français, **100 % automatisée**
     de contenu IA activée), 3 Shorts extraits, artefact archivé 3 jours
     pour validation humaine (5 min) dans YouTube Studio.
 
-## Les 9 secrets à mettre dans GitHub
+## Les secrets à mettre dans GitHub
 
 *Settings → Secrets and variables → Actions* (ne jamais écrire une clé
 dans le code, ni dans le chat) :
 
 | Secret | À quoi il sert |
 |---|---|
-| `GEMINI_API_KEY` | Script JSON (`gemini-2.5-flash`) |
-| `GROQ_API_KEY` | Fact-check (`llama-3.1-8b-instant`) |
-| `PEXELS_KEY` | Visuels (secours — nouvelles clés en pause) |
-| `PIXABAY_KEY` | Visuels (priorité) + musique |
-| `FREESOUND_KEY` | Effets et ambiances (CC0 uniquement) |
+| `GEMINI_API_KEY` | Script JSON (`gemini-2.5-flash`) + fact-check |
 | `YT_CLIENT_ID` | Publication YouTube (OAuth) |
 | `YT_CLIENT_SECRET` | Publication YouTube (OAuth) |
 | `YT_REFRESH_TOKEN` | Publication YouTube (OAuth) |
 | `SHEET_ID` | ID du Google Sheet des 60 sujets |
 
-Xeno-canto et Wikipédia/GBIF ne demandent aucune clé.
+**Gratuits et sans clé (utilisés d'office par le robot Varus) :**
+Openverse (photos + sons), Wikimedia Commons (photos + vidéos),
+Wikipédia/GBIF (faits). En secours seulement si leurs clés sont
+présentes un jour : Pixabay, Pexels, Freesound, Xeno-canto.
 
 ## Lancer en local (mode test, sans clés)
 
@@ -68,7 +67,7 @@ et ne publie rien.
 Pour produire une vidéo complète en local (clés requises) :
 
 ```bash
-export GEMINI_API_KEY=... GROQ_API_KEY=... PIXABAY_KEY=... FREESOUND_KEY=...
+export GEMINI_API_KEY=...
 export YT_CLIENT_ID=... YT_CLIENT_SECRET=... YT_REFRESH_TOKEN=...
 python src/main.py --topic Guépard --no-upload   # sans publier
 python src/main.py                               # run complet
