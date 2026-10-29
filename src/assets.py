@@ -21,10 +21,18 @@ Secours (seulement si leurs clés sont présentes) :
 import hashlib
 import json
 import os
+import time
 
 import requests
 
 TIMEOUT = 60
+TAILLE_MAX_TELECHARGEMENT_OCTETS = 2_000_000_000  # 2 Go : un clip de
+# scène fait quelques dizaines de Mo ; au-delà, on refuse plutôt que
+# de charger tout le fichier en RAM (l'ancien r.content pouvait tuer
+# le runner sur un gros fichier).
+BUDGET_VISUEL_SCENE_S = 300  # plafond par scène pour la recherche
+# (formes simplifiées × fournisseurs) : au-delà, on échoue vite avec
+# un message clair au lieu de brûler le budget du job.
 JOURNAL = "cache/usage_log.json"
 INTERDIT_NB_VIDEOS = 5
 
@@ -33,12 +41,28 @@ UA = "Varus/1.0 (robot documentaire Territoire Brut ; contact via YouTube)"
 
 
 def _telecharger(url, chemin):
+    """Télécharge en streaming (jamais tout en RAM) avec un plafond de
+    taille : au-delà, le fichier partiel est supprimé et une erreur
+    claire est levée."""
     if os.path.exists(chemin):
         return chemin
-    r = requests.get(url, timeout=TIMEOUT, headers={"User-Agent": UA})
-    r.raise_for_status()
-    with open(chemin, "wb") as f:
-        f.write(r.content)
+    with requests.get(url, timeout=TIMEOUT, headers={"User-Agent": UA},
+                      stream=True) as r:
+        r.raise_for_status()
+        total = 0
+        with open(chemin, "wb") as f:
+            for morceau in r.iter_content(chunk_size=1024 * 256):
+                if not morceau:
+                    continue
+                total += len(morceau)
+                if total > TAILLE_MAX_TELECHARGEMENT_OCTETS:
+                    f.close()
+                    os.remove(chemin)
+                    raise RuntimeError(
+                        f"Fichier trop volumineux, téléchargement refusé "
+                        f"(>{TAILLE_MAX_TELECHARGEMENT_OCTETS} octets) : "
+                        f"{url[:120]}")
+                f.write(morceau)
     return chemin
 
 
@@ -277,26 +301,36 @@ def _formes_requete(requete):
     return [" ".join(mots[:n]) for n in range(len(mots), 0, -1)]
 
 
-def trouver_visuel(requete, alternative=None):
+def trouver_visuel(requete, alternative=None, budget_s=BUDGET_VISUEL_SCENE_S):
     """Visuel pour une scène : clip vidéo d'abord, sinon photo animée.
     Ordre : vidéo Wikimedia, Pixabay, Pexels (si clés), puis photo
     Openverse, Wikimedia, Pixabay, Pexels. Renvoie (chemin, type).
     Un fournisseur en panne est simplement ignoré (on passe au suivant).
     Chaque requête est essayée sous ses formes simplifiées successives,
     puis avec la requête alternative si elle existe : une requête trop
-    précise ne bloque plus la scène."""
+    précise ne bloque plus la scène.
+    Budget : la recherche s'arrête après budget_s secondes (défaut 300)
+    et renvoie (None, None) avec un log clair — mieux vaut un échec
+    rapide et lisible qu'une recherche qui mange le budget du job."""
     requetes = _formes_requete(requete)
     if alternative:
         requetes += _formes_requete(alternative)
     vues = set()
+    echeance = time.monotonic() + budget_s
     for req in requetes:
         if req in vues:
             continue
         vues.add(req)
+        if time.monotonic() > echeance:
+            print(f"[visuel] Budget de recherche dépassé ({budget_s}s) "
+                  f"pour « {requete} » : abandon de la recherche.")
+            break
         if req != requete:
             print(f"[visuel] Aucun résultat pour la forme précédente, "
                   f"essai simplifié : « {req} »")
         for fonction in (wikimedia_video, pixabay_video, pexels_video):
+            if time.monotonic() > echeance:
+                break
             try:
                 chemin = fonction(req)
             except Exception:
@@ -305,6 +339,8 @@ def trouver_visuel(requete, alternative=None):
                 return chemin, "video"
         for fonction in (openverse_photo, wikimedia_photo,
                          pixabay_photo, pexels_photo):
+            if time.monotonic() > echeance:
+                break
             try:
                 chemin = fonction(req)
             except Exception:

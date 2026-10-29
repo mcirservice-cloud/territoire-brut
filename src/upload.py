@@ -7,6 +7,7 @@ en privé : demander l'audit de conformité dès le début.
 """
 
 import os
+import time
 from datetime import datetime, timedelta, timezone
 
 from google.oauth2.credentials import Credentials
@@ -14,6 +15,9 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 CATEGORIE_ANIMAUX = "15"
+DELAI_MAX_UPLOAD_S = 1800  # plafond d'un upload : au-delà, on abandonne
+# proprement (vidéo locale conservée dans output/) au lieu de pendre
+# jusqu'au timeout job — un chunk bloqué ne doit plus manger le run.
 
 
 def youtube():
@@ -53,8 +57,14 @@ def upload(video, miniature, meta, publish_at_iso=None,
         part="snippet,status", body=body,
         media_body=MediaFileUpload(video, resumable=True))
     resp = None
+    debut = time.monotonic()
     while resp is None:
-        _statut, resp = req.next_chunk()
+        if time.monotonic() - debut > DELAI_MAX_UPLOAD_S:
+            raise RuntimeError(
+                f"Upload YouTube trop long (>{DELAI_MAX_UPLOAD_S}s) : "
+                "abandon, la vidéo locale reste dans output/ pour un "
+                "nouvel essai.")
+        _statut, resp = req.next_chunk(num_retries=5)
     video_id = resp["id"]
     if miniature and os.path.exists(miniature):
         yt.thumbnails().set(

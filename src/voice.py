@@ -14,8 +14,9 @@ au premier usage, puis mis en cache.
 """
 
 import os
-import subprocess
 import wave
+
+from exec_utils import check_output, run as run_cmd
 
 import numpy as np
 
@@ -96,17 +97,17 @@ def _synthese(texte, sortie_mp3, voix, vitesse):
         f.setsampwidth(2)
         f.setframerate(TAUX_ECHANTILLONNAGE)
         f.writeframes(pcm.tobytes())
-    subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", wav_tmp,
-                    "-codec:a", "libmp3lame", "-q:a", "4", sortie_mp3],
-                   check=True)
+    run_cmd(["ffmpeg", "-y", "-v", "error", "-i", wav_tmp,
+             "-codec:a", "libmp3lame", "-q:a", "4", sortie_mp3],
+            timeout=180)
     os.remove(wav_tmp)
 
 
 def duree_audio(chemin):
     """Durée réelle d'un fichier audio via ffprobe (secondes)."""
-    out = subprocess.check_output(
+    out = check_output(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "csv=p=0", chemin])
+         "-of", "csv=p=0", chemin], timeout=60)
     return float(out.strip())
 
 
@@ -134,6 +135,6 @@ def concatener_voix(scenes, sortie):
     with open(liste, "w", encoding="utf-8") as f:
         for s in scenes:
             f.write(f"file '{os.path.abspath(s['voice_path'])}'\n")
-    subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                    "-i", liste, "-c", "copy", sortie], check=True)
+    run_cmd(["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+             "-i", liste, "-c", "copy", sortie], timeout=180)
     return sortie

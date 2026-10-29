@@ -6,7 +6,7 @@ GitHub Actions (GPU) : l'animation "parallaxe" retombe sur un zoom,
 "clip_ia" doit être fourni par Colab/Kaggle (voir README).
 """
 
-import subprocess
+from exec_utils import run as run_cmd
 
 FPS = 25
 LARGEUR = 1920
@@ -29,9 +29,9 @@ def ken_burns(image, sortie, duree, mode="zoom_in", fps=FPS):
         z, x, y = "1.25", f"(iw-iw/zoom)*(on/{nb_images})", "ih/2-(ih/zoom/2)"
     vf = (f"scale=3840:-2,zoompan=z='{z}':x='{x}':y='{y}':d={nb_images}:"
           f"s={LARGEUR}x{HAUTEUR}:fps={fps},format=yuv420p")
-    subprocess.run(["ffmpeg", "-y", "-loop", "1", "-i", image, "-vf", vf,
-                    "-t", str(duree), "-c:v", "libx264", "-preset", "fast",
-                    sortie], check=True)
+    run_cmd(["ffmpeg", "-y", "-loop", "1", "-i", image, "-vf", vf,
+             "-t", str(duree), "-c:v", "libx264", "-preset", "fast",
+             sortie], timeout=600)
     return sortie
 
 
@@ -39,9 +39,9 @@ def fit_clip(clip, sortie, duree):
     """Adapte un clip vidéo : recadrage 1080p, boucle ou coupe à la durée."""
     vf = (f"scale={LARGEUR}:{HAUTEUR}:force_original_aspect_ratio=increase,"
           f"crop={LARGEUR}:{HAUTEUR},fps={FPS},format=yuv420p")
-    subprocess.run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", clip,
-                    "-t", str(duree), "-vf", vf, "-an",
-                    "-c:v", "libx264", "-preset", "fast", sortie], check=True)
+    run_cmd(["ffmpeg", "-y", "-stream_loop", "-1", "-i", clip,
+             "-t", str(duree), "-vf", vf, "-an",
+             "-c:v", "libx264", "-preset", "fast", sortie], timeout=600)
     return sortie
 
 

@@ -10,12 +10,17 @@ Usage :
 
 Les clés API sont lues uniquement depuis les variables d'environnement
 (secrets GitHub en production). Aucune clé n'est écrite dans le code.
+
+Politique « Bloquer mais tout sauvegarder » (décidée par Sam) : chaque
+étape écrit son résultat dans output/ dès qu'il existe (voir
+src/checkpoint.py) ; en cas de blocage ou de panne, le script, les
+signalements et le contexte sont sauvegardés avant l'arrêt, et
+l'étape d'archivage (publish.yml, if: always()) les récupère.
 """
 
 import argparse
 import json
 import os
-import subprocess
 import sys
 from datetime import datetime, timezone
 
@@ -30,6 +35,8 @@ CLES_REQUISES = ["GEMINI_API_KEY",
 # Pixabay, Pexels, Freesound et Xeno-canto ne sont que des secours
 # (utilisés seulement si leurs clés sont présentes).
 # SHEET_ID est optionnel : sans lui, on utilise topics.csv.
+# DEEPSEEK_API_KEY / OPENROUTER_API_KEY sont optionnels : sans elles, la
+# réflexion (fact-check) utilise Gemini, jamais bloquant.
 
 
 def charger_parametres():
@@ -102,22 +109,26 @@ def mode_dry_run():
 
 
 def _boucler_audio(entree, duree_s, sortie):
-    """Boucle un fichier audio jusqu'à la durée voulue."""
-    subprocess.run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", entree,
-                    "-t", str(duree_s), "-c", "copy", sortie], check=True)
+    """Boucle un fichier audio jusqu'à la durée voulue (borné)."""
+    from exec_utils import run as run_cmd
+    run_cmd(["ffmpeg", "-y", "-stream_loop", "-1", "-i", entree,
+             "-t", str(duree_s), "-c", "copy", sortie], timeout=300)
     return sortie
 
 
 def run(sujet_nom=None, sans_upload=False):
+    from checkpoint import Checkpoint
+    from exec_utils import run as run_cmd
     from facts import fetch_facts
     from script_gen import (construire_prompt, generate_script)
-    from fact_check import fact_check, appliquer_fact_check
+    from fact_check import (fact_check, appliquer_fact_check,
+                            corriger_et_reverifier)
     from topics import prochain_sujet, marquer_publie, lire_csv
     from voice import make_voice, concatener_voix
     from assets import (trouver_visuel, trouver_son, trouver_musique)
     from animate import animer_scene
     from mix import mix_audio
-    from render import generer_srt, assembler
+    from render import generer_srt, assembler, valider_frames
     from thumbnail import make_thumbnail
     from shorts import extraire_shorts
     from upload import upload, upload_short, calculer_publish_at
@@ -126,6 +137,7 @@ def run(sujet_nom=None, sans_upload=False):
     dossier_cache = parametres["dossiers"]["cache"]
     dossier_sortie = parametres["dossiers"]["sortie"]
     os.makedirs(dossier_sortie, exist_ok=True)
+    cp = Checkpoint(dossier_sortie)
 
     manquantes = cles_manquantes()
     if manquantes:
@@ -141,171 +153,220 @@ def run(sujet_nom=None, sans_upload=False):
         sujet, source = prochain_sujet()
     print(f"[pipeline] Sujet : {sujet['nom']} (source : {source}).")
 
-    # 1-2. Faits
-    faits = fetch_facts(sujet)
-    print(f"[pipeline] Faits : {len(faits)} caractères.")
+    # Tout ce qui suit la génération du script est protégé : en cas de
+    # blocage ou de panne, l'état courant est sauvegardé avant de
+    # propager l'erreur (politique « ne perd jamais rien »).
+    script = None
+    etape_courante = "sujet"
+    try:
+        # 1-2. Faits
+        etape_courante = "faits"
+        faits = fetch_facts(sujet)
+        print(f"[pipeline] Faits : {len(faits)} caractères.")
+        cp.sauver_faits(faits)
+        cp.etape("faits", {"sujet": sujet["nom"], "source": source,
+                           "caracteres": len(faits)})
 
-    # 3. Script Gemini
-    with open("config/prompts/script_master.txt", encoding="utf-8") as f:
-        modele_prompt = f.read()
-    sfx_autorises, ambiances_autorisees = charger_bibliotheques()
-    prompt = construire_prompt(modele_prompt, sujet, faits,
-                               sfx_autorises, ambiances_autorisees)
-    script = generate_script(prompt, sfx_autorises, ambiances_autorisees)
-    print(f"[pipeline] Script : {len(script['scenes'])} scènes, "
-          f"titre « {script['meta']['titre']} ».")
+        # 3. Script Gemini
+        etape_courante = "script"
+        with open("config/prompts/script_master.txt", encoding="utf-8") as f:
+            modele_prompt = f.read()
+        sfx_autorises, ambiances_autorisees = charger_bibliotheques()
+        prompt = construire_prompt(modele_prompt, sujet, faits,
+                                   sfx_autorises, ambiances_autorisees)
+        script = generate_script(prompt, sfx_autorises, ambiances_autorisees)
+        print(f"[pipeline] Script : {len(script['scenes'])} scènes, "
+              f"titre « {script['meta']['titre']} ».")
+        cp.sauver_script(script)
+        cp.etape("script", {"scenes": len(script["scenes"]),
+                            "titre": script["meta"]["titre"]})
 
-    # 4. Fact-check Gemini (+ une boucle de correction automatique)
-    from fact_check import corriger_scenes, appliquer_corrections
-    with open("config/prompts/fact_check.txt", encoding="utf-8") as f:
-        prompt_check = f.read()
-    resultat = fact_check(script, faits, prompt_check)
-    nb_problemes = appliquer_fact_check(script, resultat)
-    if resultat["verdict"] != "ok" or nb_problemes:
-        print(f"[pipeline] Fact-check : {nb_problemes} problème(s). "
-              "Scènes marquées a_verifier.")
-    scenes_a_verifier = [s["id"] for s in script["scenes"]
-                         if s.get("a_verifier")]
-    if scenes_a_verifier:
-        # Une seule tentative de correction : les scènes signalées sont
-        # réécrites avec les problèmes listés, puis revérifiées une fois.
-        # Si la correction échoue ou ne suffit pas, on retombe sur le
-        # blocage ci-dessous — mais le script est sauvegardé et archivé
-        # (publish.yml : if: always()) au lieu d'être perdu.
-        try:
-            corrections = corriger_scenes(
-                script, resultat.get("problemes", []), faits)
-            nb_corrigees = appliquer_corrections(script, corrections)
-            print(f"[pipeline] Correction automatique : {nb_corrigees} "
-                  "scène(s) réécrite(s), revérification...")
-            resultat = fact_check(script, faits, prompt_check)
-            nb_problemes = appliquer_fact_check(script, resultat)
-            print(f"[pipeline] Revérification : {nb_problemes} "
-                  "problème(s) restant(s).")
-        except Exception as e:
-            print(f"[pipeline] Correction automatique impossible "
-                  f"({type(e).__name__} : {e}) — blocage maintenu.")
+        # 4. Fact-check par réflexion (DeepSeek d'abord si la clé existe,
+        # sinon Gemini / OpenRouter gratuit) + boucle de correction
+        # BORNÉE (max 2 tentatives, config fact_check).
+        etape_courante = "fact_check"
+        with open("config/prompts/fact_check.txt", encoding="utf-8") as f:
+            prompt_check = f.read()
+        resultat = fact_check(script, faits, prompt_check)
+        nb_problemes = appliquer_fact_check(script, resultat)
+        cp.etape("fact_check_initial",
+                 {"verdict": resultat.get("verdict"),
+                  "problemes": nb_problemes})
         scenes_a_verifier = [s["id"] for s in script["scenes"]
                              if s.get("a_verifier")]
-    if scenes_a_verifier:
-        with open(os.path.join(dossier_sortie, "script.json"), "w",
-                  encoding="utf-8") as f:
-            json.dump(script, f, ensure_ascii=False, indent=2)
-        raise RuntimeError(
-            "Publication bloquée : scènes à vérifier : "
-            f"{scenes_a_verifier}. Script sauvegardé dans "
-            f"{dossier_sortie}/script.json pour relecture humaine.")
-
-    # 5. Voix
-    scenes = make_voice(script["scenes"],
-                        os.path.join(dossier_cache, "voice"))
-    duree_totale = sum(s["duree_reelle_s"] for s in scenes)
-    print(f"[pipeline] Voix : durée réelle {duree_totale:.0f} s.")
-
-    # 6-9. Visuels + animation, scène par scène
-    segments, photo_miniature, credits_assets = [], None, []
-    for s in scenes:
-        visuel = s["visuel"]
-        chemin, type_visuel = trouver_visuel(
-            visuel["requete_pexels_en"], visuel.get("requete_alternative_en"))
-        if not chemin:
+        journal_corr = []
+        if scenes_a_verifier:
+            print(f"[pipeline] Fact-check : {nb_problemes} problème(s). "
+                  "Correction automatique...")
+            max_tentatives = (parametres.get("fact_check") or {}).get(
+                "correction_max_tentatives", 2)
+            scenes_a_verifier, journal_corr = corriger_et_reverifier(
+                script, faits, prompt_check, resultat,
+                max_tentatives=max_tentatives)
+            cp.sauver_script(script)
+            cp.etape("correction",
+                     {"tentatives": journal_corr,
+                      "scenes_restantes": scenes_a_verifier})
+            print(f"[pipeline] Correction : {len(journal_corr)} "
+                  "tentative(s), "
+                  f"{len(scenes_a_verifier)} scène(s) encore signalée(s).")
+        if scenes_a_verifier:
+            # Politique « Bloquer mais tout sauvegarder » : publication
+            # bloquée, MAIS script + signalements + problèmes + contexte
+            # sont persistés (blocage.json) pour relecture humaine.
+            cp.sauver_blocage(
+                script, scenes_a_verifier, resultat.get("problemes", []),
+                {"sujet": sujet["nom"], "source": source,
+                 "tentatives_correction": journal_corr,
+                 "faits_caracteres": len(faits)})
             raise RuntimeError(
-                f"Aucun visuel trouvé pour la scène {s['id']} "
-                f"(requête : {visuel['requete_pexels_en']}).")
-        if type_visuel == "photo" and photo_miniature is None:
-            photo_miniature = chemin
-        credits_assets.append({"scene": s["id"], "visuel": chemin,
-                               "type": type_visuel})
-        segment = os.path.join(dossier_cache, "segments",
-                               f"scene_{s['id']:03d}.mp4")
-        os.makedirs(os.path.dirname(segment), exist_ok=True)
-        animer_scene(chemin, type_visuel, segment,
-                     s["duree_reelle_s"], s.get("animation", "ken_burns_zoom_in"))
-        segments.append(segment)
+                "Publication bloquée : scènes à vérifier : "
+                f"{scenes_a_verifier}. TOUT est sauvegardé dans "
+                f"{dossier_sortie}/ (script.json + blocage.json) pour "
+                "relecture humaine.")
 
-    # 10. Mixage : voix + musique + ambiance + sfx
-    voix_complete = os.path.join(dossier_cache, "voix_complete.mp3")
-    concatener_voix(scenes, voix_complete)
-    humeurs = [s.get("musique") for s in scenes if s.get("musique") != "silence"]
-    humeur = max(set(humeurs), key=humeurs.count) if humeurs else "calme"
-    musique = trouver_musique(humeur)
-    musique_bouclee = None
-    if musique:
-        musique_bouclee = os.path.join(dossier_cache, "musique_bouclee.mp3")
-        _boucler_audio(musique, duree_totale, musique_bouclee)
-    premiere_ambiance = scenes[0].get("ambiance")
-    ambiance = None
-    if premiere_ambiance:
-        with open("config/ambiances.json", encoding="utf-8") as f:
-            requete_amb = json.load(f)[premiere_ambiance]["query"]
-        ambiance = trouver_son(requete_amb)
-    sfx_pistes, t = [], 0.0
-    with open("config/sfx_library.json", encoding="utf-8") as f:
-        requetes_sfx = json.load(f)
-    for s in scenes:
-        for effet in s.get("sfx", []):
-            chemin = trouver_son(requetes_sfx[effet["cle"]]["query"])
-            if chemin:
-                delai = t + {"debut": 0, "milieu": s["duree_reelle_s"] / 2,
-                             "fin": max(0, s["duree_reelle_s"] - 1),
-                             "continu": 0}.get(effet.get("moment", "debut"), 0)
-                sfx_pistes.append((chemin, delai, effet.get("volume", 0.5)))
-        t += s["duree_reelle_s"]
-    audio_final = os.path.join(dossier_cache, "audio_final.wav")
-    mix_audio(voix_complete, musique_bouclee, ambiance, audio_final,
-              sfx=sfx_pistes)
+        # 5. Voix
+        etape_courante = "voix"
+        scenes = make_voice(script["scenes"],
+                            os.path.join(dossier_cache, "voice"))
+        duree_totale = sum(s["duree_reelle_s"] for s in scenes)
+        print(f"[pipeline] Voix : durée réelle {duree_totale:.0f} s.")
+        cp.etape("voix", {"duree_totale_s": round(duree_totale, 2)})
 
-    # Rendu + sous-titres
-    horodatage = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
-    base = f"{sujet['nom'].lower().replace(' ', '_')}-{horodatage}"
-    video_finale = os.path.join(dossier_sortie, f"{base}.mp4")
-    srt = os.path.join(dossier_sortie, f"{base}.srt")
-    generer_srt(scenes, srt)
-    assembler(segments, audio_final, video_finale, srt)
-    print(f"[pipeline] Vidéo rendue : {video_finale}.")
+        # 6-9. Visuels + animation, scène par scène
+        etape_courante = "segments"
+        segments, photo_miniature, credits_assets = [], None, []
+        for s in scenes:
+            visuel = s["visuel"]
+            chemin, type_visuel = trouver_visuel(
+                visuel["requete_pexels_en"], visuel.get("requete_alternative_en"))
+            if not chemin:
+                raise RuntimeError(
+                    f"Aucun visuel trouvé pour la scène {s['id']} "
+                    f"(requête : {visuel['requete_pexels_en']}).")
+            if type_visuel == "photo" and photo_miniature is None:
+                photo_miniature = chemin
+            credits_assets.append({"scene": s["id"], "visuel": chemin,
+                                   "type": type_visuel})
+            segment = os.path.join(dossier_cache, "segments",
+                                   f"scene_{s['id']:03d}.mp4")
+            os.makedirs(os.path.dirname(segment), exist_ok=True)
+            animer_scene(chemin, type_visuel, segment,
+                         s["duree_reelle_s"], s.get("animation", "ken_burns_zoom_in"))
+            segments.append(segment)
+        cp.etape("segments", {"nb_segments": len(segments)})
 
-    # 11. Miniature
-    meta = script["meta"]
-    if photo_miniature is None:
-        photo_miniature = os.path.join(dossier_cache, "miniature.jpg")
-        subprocess.run(["ffmpeg", "-y", "-i", segments[0], "-vframes", "1",
-                        photo_miniature], check=True)
-    miniature = os.path.join(dossier_sortie, f"{base}-miniature.jpg")
-    make_thumbnail(photo_miniature, meta["miniature"]["texte"], miniature,
-                   meta["miniature"].get("emotion", "danger"))
+        # 10. Mixage : voix + musique + ambiance + sfx
+        etape_courante = "mix"
+        voix_complete = os.path.join(dossier_cache, "voix_complete.mp3")
+        concatener_voix(scenes, voix_complete)
+        humeurs = [s.get("musique") for s in scenes if s.get("musique") != "silence"]
+        humeur = max(set(humeurs), key=humeurs.count) if humeurs else "calme"
+        musique = trouver_musique(humeur)
+        musique_bouclee = None
+        if musique:
+            musique_bouclee = os.path.join(dossier_cache, "musique_bouclee.mp3")
+            _boucler_audio(musique, duree_totale, musique_bouclee)
+        premiere_ambiance = scenes[0].get("ambiance")
+        ambiance = None
+        if premiere_ambiance:
+            with open("config/ambiances.json", encoding="utf-8") as f:
+                requete_amb = json.load(f)[premiere_ambiance]["query"]
+            ambiance = trouver_son(requete_amb)
+        sfx_pistes, t = [], 0.0
+        with open("config/sfx_library.json", encoding="utf-8") as f:
+            requetes_sfx = json.load(f)
+        for s in scenes:
+            for effet in s.get("sfx", []):
+                chemin = trouver_son(requetes_sfx[effet["cle"]]["query"])
+                if chemin:
+                    delai = t + {"debut": 0, "milieu": s["duree_reelle_s"] / 2,
+                                 "fin": max(0, s["duree_reelle_s"] - 1),
+                                 "continu": 0}.get(effet.get("moment", "debut"), 0)
+                    sfx_pistes.append((chemin, delai, effet.get("volume", 0.5)))
+            t += s["duree_reelle_s"]
+        audio_final = os.path.join(dossier_cache, "audio_final.wav")
+        mix_audio(voix_complete, musique_bouclee, ambiance, audio_final,
+                  sfx=sfx_pistes)
+        cp.etape("mix", {"sfx_pistes": len(sfx_pistes)})
 
-    # Crédits (sources, licences)
-    with open(os.path.join(dossier_sortie, f"{base}-credits.json"), "w",
-              encoding="utf-8") as f:
-        json.dump({"sujet": sujet, "sources": meta.get("sources", []),
-                   "assets": credits_assets,
-                   "voix": (f"{(parametres.get('voix') or {}).get('moteur', 'kokoro')} "
-                            f"{(parametres.get('voix') or {}).get('voix', 'ff_siwis')}"),
-                   "contenu_ia": True}, f, ensure_ascii=False, indent=2)
+        # Rendu + sous-titres + validation du rendu
+        etape_courante = "rendu"
+        horodatage = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+        base = f"{sujet['nom'].lower().replace(' ', '_')}-{horodatage}"
+        video_finale = os.path.join(dossier_sortie, f"{base}.mp4")
+        srt = os.path.join(dossier_sortie, f"{base}.srt")
+        generer_srt(scenes, srt)
+        assembler(segments, audio_final, video_finale, srt)
+        print(f"[pipeline] Vidéo rendue : {video_finale}.")
+        params_frames = parametres.get("validation_frames") or {}
+        rapport_frames = valider_frames(
+            video_finale,
+            echantillons=params_frames.get("echantillons", 8),
+            seuil_noir=params_frames.get("seuil_noir", 8),
+            proportion_max_noires=params_frames.get("proportion_max_noires",
+                                                    0.8))
+        cp.etape("validation_frames", rapport_frames)
+        print(f"[pipeline] Validation frames : ok={rapport_frames['ok']} "
+              f"({rapport_frames.get('frames_decodables', '?')} frames "
+              f"décodables, {rapport_frames.get('frames_noires', '?')} "
+              f"noires).")
+        if not rapport_frames["ok"]:
+            raise RuntimeError(
+                f"Rendu invalide ({rapport_frames.get('raison')}) : "
+                "publication bloquée, vidéo conservée dans "
+                f"{dossier_sortie}/ pour relecture humaine.")
 
-    # 12-13. Shorts + publication (privée / planifiée)
-    video_id = None
-    if not sans_upload:
-        publish_at = calculer_publish_at(
-            parametres["publication"].get("delai_publication_heures", 2))
-        video_id = upload(video_finale, miniature, meta, publish_at,
-                          parametres["publication"].get("privacy_status",
-                                                       "private"))
-        print(f"[pipeline] Vidéo uploadée en privé/planifiée : {video_id} "
-              f"(publication : {publish_at}).")
-        for short in extraire_shorts(video_finale, script):
-            sid = upload_short(short, meta, publish_at)
-            print(f"[pipeline] Short uploadé : {sid}.")
-    else:
-        print("[pipeline] Option --no-upload : publication ignorée.")
+        # 11. Miniature
+        etape_courante = "miniature"
+        meta = script["meta"]
+        if photo_miniature is None:
+            photo_miniature = os.path.join(dossier_cache, "miniature.jpg")
+            run_cmd(["ffmpeg", "-y", "-i", segments[0], "-vframes", "1",
+                     photo_miniature], timeout=120)
+        miniature = os.path.join(dossier_sortie, f"{base}-miniature.jpg")
+        make_thumbnail(photo_miniature, meta["miniature"]["texte"], miniature,
+                       meta["miniature"].get("emotion", "danger"))
+        cp.etape("miniature", {"fichier": miniature})
 
-    with open(os.path.join(dossier_sortie, "script.json"), "w",
-              encoding="utf-8") as f:
-        json.dump(script, f, ensure_ascii=False, indent=2)
-    marquer_publie(sujet, source)
-    print(f"[pipeline] Terminé : {video_finale} "
-          f"(YouTube : {video_id or 'non publié'}).")
-    return video_finale
+        # Crédits (sources, licences)
+        with open(os.path.join(dossier_sortie, f"{base}-credits.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"sujet": sujet, "sources": meta.get("sources", []),
+                       "assets": credits_assets,
+                       "voix": (f"{(parametres.get('voix') or {}).get('moteur', 'kokoro')} "
+                                f"{(parametres.get('voix') or {}).get('voix', 'ff_siwis')}"),
+                       "contenu_ia": True}, f, ensure_ascii=False, indent=2)
+
+        # 12-13. Shorts + publication (privée / planifiée)
+        etape_courante = "publication"
+        video_id = None
+        if not sans_upload:
+            publish_at = calculer_publish_at(
+                parametres["publication"].get("delai_publication_heures", 2))
+            video_id = upload(video_finale, miniature, meta, publish_at,
+                              parametres["publication"].get("privacy_status",
+                                                           "private"))
+            print(f"[pipeline] Vidéo uploadée en privé/planifiée : {video_id} "
+                  f"(publication : {publish_at}).")
+            for short in extraire_shorts(video_finale, script):
+                sid = upload_short(short, meta, publish_at)
+                print(f"[pipeline] Short uploadé : {sid}.")
+        else:
+            print("[pipeline] Option --no-upload : publication ignorée.")
+
+        cp.sauver_script(script)
+        cp.etape("termine", {"video": video_finale, "youtube": video_id})
+        marquer_publie(sujet, source)
+        print(f"[pipeline] Terminé : {video_finale} "
+              f"(YouTube : {video_id or 'non publié'}).")
+        return video_finale
+    except Exception as e:
+        # Sauvegarde de secours (ne masque jamais l'erreur d'origine) :
+        # script courant + étape + erreur, même si le run est tué juste
+        # après — l'archivage if: always() récupère output/.
+        cp.sauver_echec(script, etape_courante, e)
+        raise
 
 
 def main():

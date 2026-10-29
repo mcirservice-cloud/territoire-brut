@@ -4,15 +4,16 @@ dans le script (meta "shorts" : ids_scenes + accroche).
 """
 
 import os
-import subprocess
+
+from exec_utils import check_output, run as run_cmd
 
 LARGEUR, HAUTEUR = 1080, 1920
 
 
 def _duree(fichier):
-    out = subprocess.check_output(
+    out = check_output(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "csv=p=0", fichier])
+         "-of", "csv=p=0", fichier], timeout=60)
     return float(out.strip())
 
 
@@ -40,9 +41,9 @@ def extraire_shorts(video, script, dossier="output/shorts"):
         sortie = os.path.join(dossier, f"short_{i}.mp4")
         vf = (f"scale={LARGEUR}:{HAUTEUR}:force_original_aspect_ratio=increase,"
               f"crop={LARGEUR}:{HAUTEUR},fps=25,format=yuv420p")
-        subprocess.run(["ffmpeg", "-y", "-ss", str(debut), "-i", video,
-                        "-t", str(duree), "-vf", vf,
-                        "-c:v", "libx264", "-preset", "fast",
-                        "-c:a", "aac", sortie], check=True)
+        run_cmd(["ffmpeg", "-y", "-ss", str(debut), "-i", video,
+                 "-t", str(duree), "-vf", vf,
+                 "-c:v", "libx264", "-preset", "fast",
+                 "-c:a", "aac", sortie], timeout=600)
         sorties.append(sortie)
     return sorties

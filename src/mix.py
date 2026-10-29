@@ -7,7 +7,7 @@ Les effets ponctuels (sfx) sont posés avec adelay à leur moment,
 puis ajoutés au mix.
 """
 
-import subprocess
+from exec_utils import run as run_cmd
 
 MUSIQUE_VOLUME = 0.35
 AMBIANCE_VOLUME = 0.25
@@ -53,5 +53,5 @@ def mix_audio(voix, musique, ambiance, sortie, sfx=None,
                    f"loudnorm={LOUDNORM}[out]")
     cmd = ["ffmpeg", "-y", *entrees, "-filter_complex",
            ";".join(filtres), "-map", "[out]", sortie]
-    subprocess.run(cmd, check=True)
+    run_cmd(cmd, timeout=900)
     return sortie

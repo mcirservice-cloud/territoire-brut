@@ -1,8 +1,11 @@
-"""Génération du script JSON avec la chaîne LLM (Gemini puis secours).
+"""Génération du script JSON avec la chaîne LLM (OpenRouter gratuit d'abord).
 
-Modèles essayés dans l'ordre (voir src/llm_chain.py) : Gemini 3.8-flash,
-Gemini 3.5-flash, DeepSeek, OpenRouter GLM-5.3-Flash, OpenRouter gratuit.
-Les couches sans clé sont ignorées, jamais bloquantes.
+Ordre des fournisseurs (voir src/llm_chain.py) : OpenRouter gratuit
+(modèle configuré puis routeur auto), DeepSeek, puis Gemini REST borné
+en dernier recours uniquement. Les couches sans clé sont ignorées,
+jamais bloquantes. AUCUN appel SDK : tous les appels passent par HTTP
+avec timeout explicite, donc la génération ne peut plus pendre
+indéfiniment comme au run n°9.
 
 Validation structurelle avant acceptation :
 - ids de scènes continus (1..N)
@@ -15,12 +18,10 @@ Validation structurelle avant acceptation :
 
 import json
 import os
-import time
 
-from llm_chain import (AucunFournisseurSecours, appeler_fournisseurs_openai,
-                       charger_json, config_chaine)
+from llm_chain import (appeler_generation, au_moins_une_cle, charger_json,
+                       config_chaine)
 
-MODEL = "gemini-3.8-flash"
 TEMPERATURE = 0.7
 ESSAIS_MAX = 3
 PART_MAX_CLIP_IA = 0.2
@@ -99,79 +100,30 @@ def construire_prompt(modele_prompt, sujet, faits, sfx, ambiances):
     return prompt
 
 
-def _est_transitoire(e):
-    """Vrai si l'erreur ressemble à une panne temporaire (surcharge 503/429
-    ou coupure réseau) : ces cas méritent un réessai, pas un échec du run."""
-    message = str(e)
-    if any(code in message for code in
-           ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED")):
-        return True
-    nom = type(e).__name__
-    if any(mot in nom for mot in
-           ("RemoteProtocol", "Connect", "Timeout", "Network", "Connection")):
-        return True
-    if any(mot in message for mot in
-           ("disconnected", "connection", "timeout", "timed out",
-            "reset by peer", "EOF")):
-        return True
-    return isinstance(e, (ConnectionError, TimeoutError))
+def _generer_texte(prompt_courant, config=None):
+    """Génère le texte brut via la chaîne OpenRouter-first.
 
-
-def _appeler_gemini(client, prompt_courant, modele=MODEL):
-    """Appelle Gemini avec réessais sur les pannes temporaires
-    (surcharge 503/429 ou coupure réseau) : une pointe de demande ou une
-    connexion coupée ne doit pas tuer le run."""
-    delais = [30, 60, 120]
-    for tentative in range(1, len(delais) + 2):
-        try:
-            return client.models.generate_content(
-                model=modele, contents=prompt_courant,
-                config={"response_mime_type": "application/json",
-                        "temperature": TEMPERATURE})
-        except Exception as e:
-            if not _est_transitoire(e) or tentative > len(delais):
-                raise
-            attente = delais[tentative - 1]
-            print(f"[script] Gemini indisponible ({type(e).__name__}), "
-                  f"nouvel essai dans {attente}s "
-                  f"(tentative {tentative}/{len(delais) + 1})")
-            time.sleep(attente)
-    raise RuntimeError("Échec Gemini après réessais")
-
-
-def _generer_texte(client, prompt_courant):
-    """Essaie Gemini (SDK, modèles configurés) puis les secours OpenAI.
-    Renvoie le texte brut de la réponse."""
-    config = config_chaine()
-    derniere_erreur = None
-    for modele in config["gemini_modeles"]:
-        try:
-            return _appeler_gemini(client, prompt_courant, modele).text
-        except Exception as e:
-            derniere_erreur = e
-            print(f"[script] {modele} indisponible, secours suivant...")
-    try:
-        return appeler_fournisseurs_openai(prompt_courant, TEMPERATURE, config)
-    except AucunFournisseurSecours:
-        raise derniere_erreur
+    Renvoie le texte brut de la réponse. Lève l'erreur du dernier
+    fournisseur si tous échouent ; en l'absence totale de clé,
+    generate_script a déjà levé une erreur claire avant cet appel.
+    """
+    return appeler_generation(prompt_courant, TEMPERATURE, config)
 
 
 def generate_script(prompt, sfx_autorises=None, ambiances_autorisees=None,
-                    essais=ESSAIS_MAX):
+                    essais=ESSAIS_MAX, config=None):
     """Appelle la chaîne LLM en mode JSON jusqu'à obtenir un script valide."""
-    from google import genai
-
-    cle = os.environ.get("GEMINI_API_KEY")
-    if not cle:
+    if not au_moins_une_cle():
         raise RuntimeError(
-            "Clé Gemini manquante : définissez la variable d'environnement "
-            "GEMINI_API_KEY (ou le secret GitHub GEMINI_API_KEY).")
-    client = genai.Client(api_key=cle)
+            "Aucune clé LLM définie : définissez au moins une de "
+            "OPENROUTER_API_KEY, DEEPSEEK_API_KEY ou GEMINI_API_KEY "
+            "(secrets GitHub, jamais dans le chat).")
+    config = config or config_chaine()
 
     prompt_courant = prompt
     derniere_erreur = None
     for essai in range(1, essais + 1):
-        texte = _generer_texte(client, prompt_courant)
+        texte = _generer_texte(prompt_courant, config)
         try:
             data = charger_json(texte)
             validate(data, sfx_autorises, ambiances_autorisees)
