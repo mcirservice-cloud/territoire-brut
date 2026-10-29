@@ -155,7 +155,8 @@ def run(sujet_nom=None, sans_upload=False):
     print(f"[pipeline] Script : {len(script['scenes'])} scènes, "
           f"titre « {script['meta']['titre']} ».")
 
-    # 4. Fact-check Gemini
+    # 4. Fact-check Gemini (+ une boucle de correction automatique)
+    from fact_check import corriger_scenes, appliquer_corrections
     with open("config/prompts/fact_check.txt", encoding="utf-8") as f:
         prompt_check = f.read()
     resultat = fact_check(script, faits, prompt_check)
@@ -165,6 +166,27 @@ def run(sujet_nom=None, sans_upload=False):
               "Scènes marquées a_verifier.")
     scenes_a_verifier = [s["id"] for s in script["scenes"]
                          if s.get("a_verifier")]
+    if scenes_a_verifier:
+        # Une seule tentative de correction : les scènes signalées sont
+        # réécrites avec les problèmes listés, puis revérifiées une fois.
+        # Si la correction échoue ou ne suffit pas, on retombe sur le
+        # blocage ci-dessous — mais le script est sauvegardé et archivé
+        # (publish.yml : if: always()) au lieu d'être perdu.
+        try:
+            corrections = corriger_scenes(
+                script, resultat.get("problemes", []), faits)
+            nb_corrigees = appliquer_corrections(script, corrections)
+            print(f"[pipeline] Correction automatique : {nb_corrigees} "
+                  "scène(s) réécrite(s), revérification...")
+            resultat = fact_check(script, faits, prompt_check)
+            nb_problemes = appliquer_fact_check(script, resultat)
+            print(f"[pipeline] Revérification : {nb_problemes} "
+                  "problème(s) restant(s).")
+        except Exception as e:
+            print(f"[pipeline] Correction automatique impossible "
+                  f"({type(e).__name__} : {e}) — blocage maintenu.")
+        scenes_a_verifier = [s["id"] for s in script["scenes"]
+                             if s.get("a_verifier")]
     if scenes_a_verifier:
         with open(os.path.join(dossier_sortie, "script.json"), "w",
                   encoding="utf-8") as f:
