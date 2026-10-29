@@ -25,7 +25,7 @@ video:
   preset: "fast"
 
 script:
-  modele_gemini: "gemini-2.5-flash"
+  modele_gemini: "gemini-3.0-flash"
   temperature: 0.7
   essais_max: 3
   mots_par_minute: 150
@@ -35,7 +35,7 @@ script:
   part_max_clip_ia: 0.2
 
 fact_check:
-  modele_gemini: "gemini-2.5-flash"  # la même clé Gemini que le script
+  modele_gemini: "gemini-3.0-flash"  # la même clé Gemini que le script
 
 visuels:
   priorite: "openverse"  # Openverse (photos, sans clé) puis Wikimedia (photos + vidéos, sans clé)
