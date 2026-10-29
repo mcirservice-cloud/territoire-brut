@@ -5,7 +5,7 @@ Les faits envoyés à Gemini sont limités à 9 000 caractères au total
 Aucune clé API nécessaire pour ces deux sources.
 """
 
-USER_AGENT = "TerritoireBrut/1.0 (chaine documentaire automatisee ; contact via YouTube)"
+USER_AGENT = "Varus/1.0 (robot documentaire Territoire Brut ; contact via YouTube)"
 TIMEOUT = 30
 
 

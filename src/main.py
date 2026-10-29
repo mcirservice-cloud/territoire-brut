@@ -1,4 +1,4 @@
-"""Chef d'orchestre du pipeline « Territoire Brut ».
+"""Robot Varus — chef d'orchestre du pipeline « Territoire Brut ».
 
 Usage :
     python src/main.py                  # une vidéo complète (clés requises)
@@ -24,10 +24,11 @@ RACINE = os.path.dirname(ICI)
 sys.path.insert(0, ICI)
 os.chdir(RACINE)
 
-CLES_REQUISES = ["GEMINI_API_KEY", "GROQ_API_KEY", "FREESOUND_KEY",
+CLES_REQUISES = ["GEMINI_API_KEY",
                  "YT_CLIENT_ID", "YT_CLIENT_SECRET", "YT_REFRESH_TOKEN"]
-# Visuels : Pixabay en priorité, Pexels en secours (au moins une des deux).
-CLES_VISUELLES = ["PIXABAY_KEY", "PEXELS_KEY"]
+# Visuels et sons : Openverse + Wikimedia Commons sont gratuits et sans clé.
+# Pixabay, Pexels, Freesound et Xeno-canto ne sont que des secours
+# (utilisés seulement si leurs clés sont présentes).
 # SHEET_ID est optionnel : sans lui, on utilise topics.csv.
 
 
@@ -47,10 +48,7 @@ def charger_parametres():
 
 def cles_manquantes():
     """Liste en français les clés manquantes pour un run complet."""
-    manquantes = [c for c in CLES_REQUISES if not os.environ.get(c)]
-    if not any(os.environ.get(c) for c in CLES_VISUELLES):
-        manquantes.append("PIXABAY_KEY ou PEXELS_KEY (au moins une des deux)")
-    return manquantes
+    return [c for c in CLES_REQUISES if not os.environ.get(c)]
 
 
 def erreur_cles(manquantes):
@@ -116,7 +114,7 @@ def run(sujet_nom=None, sans_upload=False):
     from fact_check import fact_check, appliquer_fact_check
     from topics import prochain_sujet, marquer_publie, lire_csv
     from voice import make_voice, concatener_voix
-    from assets import (trouver_visuel, freesound, musique_pixabay)
+    from assets import (trouver_visuel, trouver_son, trouver_musique)
     from animate import animer_scene
     from mix import mix_audio
     from render import generer_srt, assembler
@@ -157,7 +155,7 @@ def run(sujet_nom=None, sans_upload=False):
     print(f"[pipeline] Script : {len(script['scenes'])} scènes, "
           f"titre « {script['meta']['titre']} ».")
 
-    # 4. Fact-check Groq
+    # 4. Fact-check Gemini
     with open("config/prompts/fact_check.txt", encoding="utf-8") as f:
         prompt_check = f.read()
     resultat = fact_check(script, faits, prompt_check)
@@ -208,7 +206,7 @@ def run(sujet_nom=None, sans_upload=False):
     concatener_voix(scenes, voix_complete)
     humeurs = [s.get("musique") for s in scenes if s.get("musique") != "silence"]
     humeur = max(set(humeurs), key=humeurs.count) if humeurs else "calme"
-    musique = musique_pixabay(humeur)
+    musique = trouver_musique(humeur)
     musique_bouclee = None
     if musique:
         musique_bouclee = os.path.join(dossier_cache, "musique_bouclee.mp3")
@@ -218,13 +216,13 @@ def run(sujet_nom=None, sans_upload=False):
     if premiere_ambiance:
         with open("config/ambiances.json", encoding="utf-8") as f:
             requete_amb = json.load(f)[premiere_ambiance]["query"]
-        ambiance = freesound(requete_amb)
+        ambiance = trouver_son(requete_amb)
     sfx_pistes, t = [], 0.0
     with open("config/sfx_library.json", encoding="utf-8") as f:
         requetes_sfx = json.load(f)
     for s in scenes:
         for effet in s.get("sfx", []):
-            chemin = freesound(requetes_sfx[effet["cle"]]["query"])
+            chemin = trouver_son(requetes_sfx[effet["cle"]]["query"])
             if chemin:
                 delai = t + {"debut": 0, "milieu": s["duree_reelle_s"] / 2,
                              "fin": max(0, s["duree_reelle_s"] - 1),
@@ -289,7 +287,7 @@ def run(sujet_nom=None, sans_upload=False):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Pipeline « Territoire Brut » : documentaire animalier automatisé.")
+        description="Robot Varus — pipeline « Territoire Brut » : documentaire animalier automatisé.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Test sans clés : faits + validation du script d'exemple.")
     parser.add_argument("--topic", help="Forcer un sujet par son nom (test local).")

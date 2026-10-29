@@ -1,10 +1,16 @@
-"""Images, clips et sons : Pixabay EN PRIORITÉ, Pexels en secours,
-Freesound filtré CC0, Xeno-canto sans clé.
+"""Images, clips et sons — robot Varus.
 
-- Pixabay d'abord : les nouvelles clés Pexels sont en pause.
+Priorité (gratuits, sans clé obligatoire) :
+- Openverse : photos et sons, licences Creative Commons.
+- Wikimedia Commons : photos et vidéos, sans clé, ne bloque jamais.
+Secours (seulement si leurs clés sont présentes) :
+- Pixabay, Pexels, Freesound, Xeno-canto.
+
 - 1 requête par scène maximum.
 - Cache local + journal d'usage (cache/usage_log.json) : un clip déjà
   utilisé dans une vidéo récente n'est pas réutilisé.
+- Attributions (titre, auteur, licence) journalisées dans
+  cache/attributions.json.
 """
 
 import hashlib
@@ -18,11 +24,13 @@ JOURNAL = "cache/usage_log.json"
 INTERDIT_NB_VIDEOS = 5
 
 
+UA = "Varus/1.0 (robot documentaire Territoire Brut ; contact via YouTube)"
+
+
 def _telecharger(url, chemin):
     if os.path.exists(chemin):
         return chemin
-    r = requests.get(url, timeout=TIMEOUT,
-                     headers={"User-Agent": "TerritoireBrut/1.0"})
+    r = requests.get(url, timeout=TIMEOUT, headers={"User-Agent": UA})
     r.raise_for_status()
     with open(chemin, "wb") as f:
         f.write(r.content)
@@ -44,6 +52,22 @@ def _journal_enregistrer(identifiant):
     os.makedirs(os.path.dirname(JOURNAL), exist_ok=True)
     with open(JOURNAL, "w", encoding="utf-8") as f:
         json.dump(journal, f)
+
+
+def _attribution_enregistrer(titre, createur, licence, url_source):
+    """Journalise l'attribution d'un média Creative Commons."""
+    chemin = "cache/attributions.json"
+    try:
+        with open(chemin, encoding="utf-8") as f:
+            journal = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        journal = []
+    journal.append({"titre": titre, "createur": createur,
+                    "licence": licence, "source": url_source})
+    journal = journal[-500:]
+    os.makedirs(os.path.dirname(chemin), exist_ok=True)
+    with open(chemin, "w", encoding="utf-8") as f:
+        json.dump(journal, f, ensure_ascii=False)
 
 
 def deja_utilise(identifiant, nb_videos=INTERDIT_NB_VIDEOS):
@@ -160,15 +184,103 @@ def pexels_photo(requete, dossier="cache/photos"):
     return None
 
 
+def openverse_photo(requete, dossier="cache/photos"):
+    """Photo Openverse (sans clé, licence commerciale). Renvoie le chemin ou None."""
+    os.makedirs(dossier, exist_ok=True)
+    r = requests.get("https://api.openverse.org/v1/images/",
+                     params={"q": requete, "license_type": "commercial",
+                             "page_size": 5},
+                     headers={"User-Agent": UA}, timeout=TIMEOUT)
+    r.raise_for_status()
+    for photo in r.json().get("results", []):
+        url = photo.get("url")
+        if not url:
+            continue
+        identifiant = f"openverse:{photo.get('id')}"
+        if deja_utilise(identifiant):
+            continue
+        ext = os.path.splitext(url.split("?")[0])[1] or ".jpg"
+        chemin = os.path.join(dossier, f"openverse-{photo['id']}{ext}")
+        _telecharger(url, chemin)
+        _journal_enregistrer(identifiant)
+        _attribution_enregistrer(photo.get("title"), photo.get("creator"),
+                                 photo.get("license"),
+                                 photo.get("foreign_landing_url"))
+        return chemin
+    return None
+
+
+def _wikimedia(requete, type_fichier, dossier):
+    """Recherche Wikimedia Commons (sans clé). Renvoie (url, titre) ou None."""
+    r = requests.get("https://commons.wikimedia.org/w/api.php",
+                     params={"action": "query", "generator": "search",
+                             "gsrsearch": f"filetype:{type_fichier} {requete}",
+                             "gsrnamespace": 6, "gsrlimit": 5,
+                             "prop": "imageinfo", "iiprop": "url|extmetadata",
+                             "format": "json"},
+                     headers={"User-Agent": UA}, timeout=TIMEOUT)
+    r.raise_for_status()
+    pages = r.json().get("query", {}).get("pages", {})
+    for page in pages.values():
+        info = (page.get("imageinfo") or [{}])[0]
+        url = info.get("url")
+        if not url:
+            continue
+        identifiant = f"wikimedia:{page.get('title')}"
+        if deja_utilise(identifiant):
+            continue
+        return url, identifiant
+    return None, None
+
+
+def wikimedia_video(requete, dossier="cache/clips"):
+    """Clip vidéo Wikimedia Commons (sans clé). Renvoie le chemin ou None."""
+    os.makedirs(dossier, exist_ok=True)
+    url, identifiant = _wikimedia(requete, "video", dossier)
+    if not url:
+        return None
+    if not url.lower().endswith((".webm", ".mp4", ".ogv")):
+        return None
+    ext = os.path.splitext(url.split("?")[0])[1] or ".webm"
+    chemin = os.path.join(
+        dossier, hashlib.md5(url.encode()).hexdigest() + ext)
+    _telecharger(url, chemin)
+    _journal_enregistrer(identifiant)
+    return chemin
+
+
+def wikimedia_photo(requete, dossier="cache/photos"):
+    """Photo Wikimedia Commons (sans clé). Renvoie le chemin ou None."""
+    os.makedirs(dossier, exist_ok=True)
+    url, identifiant = _wikimedia(requete, "bitmap|drawing", dossier)
+    if not url:
+        return None
+    ext = os.path.splitext(url.split("?")[0])[1] or ".jpg"
+    chemin = os.path.join(
+        dossier, hashlib.md5(url.encode()).hexdigest() + ext)
+    _telecharger(url, chemin)
+    _journal_enregistrer(identifiant)
+    return chemin
+
+
 def trouver_visuel(requete, alternative=None):
     """Visuel pour une scène : clip vidéo d'abord, sinon photo animée.
-    Pixabay en priorité, Pexels en secours. Renvoie (chemin, type)."""
-    for fonction in (pixabay_video, pexels_video):
-        chemin = fonction(requete)
+    Ordre : vidéo Wikimedia, Pixabay, Pexels (si clés), puis photo
+    Openverse, Wikimedia, Pixabay, Pexels. Renvoie (chemin, type).
+    Un fournisseur en panne est simplement ignoré (on passe au suivant)."""
+    for fonction in (wikimedia_video, pixabay_video, pexels_video):
+        try:
+            chemin = fonction(requete)
+        except Exception:
+            continue
         if chemin:
             return chemin, "video"
-    for fonction in (pixabay_photo, pexels_photo):
-        chemin = fonction(requete)
+    for fonction in (openverse_photo, wikimedia_photo,
+                     pixabay_photo, pexels_photo):
+        try:
+            chemin = fonction(requete)
+        except Exception:
+            continue
         if chemin:
             return chemin, "photo"
     if alternative:
@@ -199,10 +311,15 @@ def freesound(requete, dossier="cache/sfx"):
 
 
 def xeno_canto(requete, dossier="cache/sfx"):
-    """Chant d'oiseau Xeno-canto, sans clé. Renvoie le chemin ou None."""
+    """Chant d'oiseau Xeno-canto (clé XENO_CANTO_API_KEY si présente,
+    obligatoire depuis octobre 2025 pour télécharger). Renvoie le chemin ou None."""
     os.makedirs(dossier, exist_ok=True)
-    r = requests.get("https://xeno-canto.org/api/2/recordings",
-                     params={"query": requete}, timeout=TIMEOUT)
+    params = {"query": requete}
+    cle = os.environ.get("XENO_CANTO_API_KEY")
+    if cle:
+        params["key"] = cle
+    r = requests.get("https://xeno-canto.org/api/3/recordings",
+                     params=params, timeout=TIMEOUT)
     r.raise_for_status()
     for enr in r.json().get("recordings", []):
         url = enr.get("file")
@@ -211,6 +328,41 @@ def xeno_canto(requete, dossier="cache/sfx"):
         chemin = os.path.join(dossier, f"xc-{enr['id']}.mp3")
         _telecharger(url, chemin)
         return chemin
+    return None
+
+
+def openverse_audio(requete, dossier="cache/sfx"):
+    """Son Openverse (sans clé, licence commerciale). Renvoie le chemin ou None."""
+    os.makedirs(dossier, exist_ok=True)
+    r = requests.get("https://api.openverse.org/v1/audio/",
+                     params={"q": requete, "license_type": "commercial",
+                             "page_size": 5},
+                     headers={"User-Agent": UA}, timeout=TIMEOUT)
+    r.raise_for_status()
+    for son in r.json().get("results", []):
+        url = son.get("url")
+        if not url:
+            continue
+        ext = os.path.splitext(url.split("?")[0])[1] or ".mp3"
+        chemin = os.path.join(dossier, f"openverse-{son['id']}{ext}")
+        _telecharger(url, chemin)
+        _attribution_enregistrer(son.get("title"), son.get("creator"),
+                                 son.get("license"),
+                                 son.get("foreign_landing_url"))
+        return chemin
+    return None
+
+
+def trouver_son(requete, dossier="cache/sfx"):
+    """Son : Openverse d'abord, Freesound puis Xeno-canto si leurs clés
+    existent. Un fournisseur en panne est simplement ignoré."""
+    for fonction in (openverse_audio, freesound, xeno_canto):
+        try:
+            chemin = fonction(requete, dossier)
+        except Exception:
+            continue
+        if chemin:
+            return chemin
     return None
 
 
@@ -237,3 +389,20 @@ def musique_pixabay(humeur, dossier="cache/musique"):
         _telecharger(url, chemin)
         return chemin
     return None
+
+
+def trouver_musique(humeur, dossier="cache/musique"):
+    """Musique : Openverse d'abord, Pixabay si sa clé est présente."""
+    requetes = {"calme": "calm ambient documentary",
+                "tension": "suspense tension cinematic",
+                "climax": "epic dramatic orchestral"}
+    try:
+        chemin = openverse_audio(requetes.get(humeur, "ambient"), dossier)
+    except Exception:
+        chemin = None
+    if chemin:
+        return chemin
+    try:
+        return musique_pixabay(humeur, dossier)
+    except Exception:
+        return None
