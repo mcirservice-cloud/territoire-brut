@@ -28,15 +28,29 @@ def lire_csv(path=None):
 
 
 def lire_sheet():
-    """Lit le Google Sheet via gspread. Nécessite SHEET_ID et un compte
-    de service (fichier JSON indiqué par GOOGLE_SERVICE_ACCOUNT_JSON,
-    ou service_account.json à la racine)."""
+    """Lit le Google Sheet via gspread. Deux authentifications possibles :
+    - jeton OAuth (SHEETS_REFRESH_TOKEN + YT_CLIENT_ID/YT_CLIENT_SECRET),
+      obtenu comme pour YouTube via OAuth Playground ;
+    - sinon compte de service (fichier JSON indiqué par
+      GOOGLE_SERVICE_ACCOUNT_JSON, ou service_account.json à la racine)."""
     import gspread
 
     sheet_id = os.environ["SHEET_ID"]
-    creds_path = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON",
-                                "service_account.json")
-    gc = gspread.service_account(filename=creds_path)
+    refresh = os.environ.get("SHEETS_REFRESH_TOKEN")
+    if refresh:
+        from google.oauth2.credentials import Credentials
+        creds = Credentials(
+            None,
+            refresh_token=refresh,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=os.environ["YT_CLIENT_ID"],
+            client_secret=os.environ["YT_CLIENT_SECRET"],
+        )
+        gc = gspread.authorize(creds)
+    else:
+        creds_path = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON",
+                                    "service_account.json")
+        gc = gspread.service_account(filename=creds_path)
     feuille = gc.open_by_key(sheet_id).sheet1
     return feuille.get_all_records(), feuille
 
