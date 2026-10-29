@@ -35,8 +35,11 @@ script:
 
 fact_check:
   modele_gemini: "gemini-3.8-flash"  # la même clé Gemini que le script
-  correction_max_tentatives: 2  # boucle de correction BORNÉE : après
-  # 2 tentatives, publication BLOQUÉE mais tout sauvegardé (blocage.json)
+  correction_max_tentatives: 4  # augmenté après run #11 (2 insuffisants)
+  # Après 4 tentatives, les scènes encore signalées sont RETIRÉES du
+  # script (auto-ajustement, décision Sam 2026-10-29) et le traitement
+  # continue ; blocage + sauvegarde seulement si moins de 20 scènes
+  # resteraient.
 
 llm_chaine:
   # Chaîne LLM pour le scénario et le fact-check (règle : chaque
