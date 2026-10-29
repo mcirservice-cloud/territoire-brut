@@ -11,7 +11,7 @@ Chaîne YouTube de documentaires animaliers en français, **100 % automatisée**
    (ou de `topics.csv` en local).
 2. **Faits** — récupère les faits vérifiables sur Wikipédia FR et GBIF
    (plafonnés à 9 000 caractères pour économiser les tokens).
-3. **Script** — Gemini (`gemini-2.5-flash`, mode JSON, température 0,7)
+3. **Script** — Gemini (`gemini-3.0-flash`, mode JSON, température 0,7)
    écrit le plan de montage complet avec le prompt maître
    (`config/prompts/script_master.txt`), avec validation structurelle
    (ids continus, max 20 % de clips IA, jamais deux animations
@@ -41,7 +41,7 @@ dans le code, ni dans le chat) :
 
 | Secret | À quoi il sert |
 |---|---|
-| `GEMINI_API_KEY` | Script JSON (`gemini-2.5-flash`) + fact-check |
+| `GEMINI_API_KEY` | Script JSON (`gemini-3.0-flash`) + fact-check |
 | `YT_CLIENT_ID` | Publication YouTube (OAuth) |
 | `YT_CLIENT_SECRET` | Publication YouTube (OAuth) |
 | `YT_REFRESH_TOKEN` | Publication YouTube (OAuth) |
