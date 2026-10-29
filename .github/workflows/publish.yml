@@ -45,7 +45,7 @@ jobs:
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
           SHEETS_REFRESH_TOKEN: ${{ secrets.SHEETS_REFRESH_TOKEN }}
-        run: python src/main.py
+        run: python -u src/main.py
 
       - name: Archiver la vidéo (relecture humaine)
         # if: always() : même si la production échoue (ex. blocage
