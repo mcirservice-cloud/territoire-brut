@@ -48,6 +48,10 @@ jobs:
         run: python src/main.py
 
       - name: Archiver la vidéo (relecture humaine)
+        # if: always() : même si la production échoue (ex. blocage
+        # fact-check), le script sauvegardé dans output/ est archivé
+        # au lieu d'être perdu avec le runner éphémère.
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: video-${{ github.run_id }}
