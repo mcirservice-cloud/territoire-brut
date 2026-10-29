@@ -1,6 +1,9 @@
-# Paramètres du pipeline « Territoire Brut »
+# Paramètres du robot « Varus » pour la chaîne « Territoire Brut »
 # Tous les secrets (clés API, identifiants YouTube) sont lus depuis les
 # variables d'environnement : JAMAIS de clé dans ce fichier.
+
+robot:
+  nom: "Varus"
 
 chaine:
   nom: "Territoire Brut"
@@ -32,11 +35,11 @@ script:
   part_max_clip_ia: 0.2
 
 fact_check:
-  modele_groq: "llama-3.1-8b-instant"
+  modele_gemini: "gemini-2.5-flash"  # la même clé Gemini que le script
 
 visuels:
-  priorite: "pixabay"  # Pixabay en priorité : les nouvelles clés Pexels sont en pause
-  secours: "pexels"
+  priorite: "openverse"  # Openverse (photos, sans clé) puis Wikimedia (photos + vidéos, sans clé)
+  secours: "wikimedia"  # Pixabay / Pexels seulement si leurs clés sont présentes
   largeur_min_px: 1280
   requetes_max_par_scene: 1
   reutilisation_interdite_nb_videos: 5  # ne pas réutiliser un clip dans les 5 dernières vidéos
