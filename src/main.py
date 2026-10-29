@@ -126,7 +126,8 @@ def run(sujet_nom=None, sans_upload=False):
                             retirer_scenes_signalees)
     from topics import prochain_sujet, marquer_publie, lire_csv
     from voice import make_voice, concatener_voix
-    from assets import (trouver_visuel, trouver_son, trouver_musique)
+    from assets import (trouver_visuel, trouver_son, trouver_musique,
+                        generer_image_secours)
     from animate import animer_scene
     from mix import mix_audio
     from render import generer_srt, assembler, valider_frames
@@ -253,16 +254,44 @@ def run(sujet_nom=None, sans_upload=False):
         cp.etape("voix", {"duree_totale_s": round(duree_totale, 2)})
 
         # 6-9. Visuels + animation, scène par scène
+        # Règle run #12 : une scène sans visuel ne tue PLUS jamais la
+        # vidéo. Ordre de secours : requête générique courte, puis
+        # réutilisation du visuel précédent, puis image de secours
+        # locale (PIL, sans réseau). La scène est signalée dans le
+        # checkpoint pour la relecture humaine, mais le traitement
+        # continue jusqu'à la vidéo finale.
         etape_courante = "segments"
         segments, photo_miniature, credits_assets = [], None, []
+        scenes_visuel_secours, dernier_visuel, dernier_type = [], None, None
         for s in scenes:
             visuel = s["visuel"]
+            requete = visuel["requete_pexels_en"]
             chemin, type_visuel = trouver_visuel(
-                visuel["requete_pexels_en"], visuel.get("requete_alternative_en"))
+                requete, visuel.get("requete_alternative_en"))
+            mode_visuel = "normal"
             if not chemin:
-                raise RuntimeError(
-                    f"Aucun visuel trouvé pour la scène {s['id']} "
-                    f"(requête : {visuel['requete_pexels_en']}).")
+                premier_mot = (requete or "").split()[0] if requete else ""
+                for generique in (premier_mot, "savanna"):
+                    if not generique:
+                        continue
+                    chemin, type_visuel = trouver_visuel(
+                        generique, budget_s=60)
+                    if chemin:
+                        mode_visuel = "generique"
+                        break
+            if not chemin and dernier_visuel:
+                chemin, type_visuel, mode_visuel = (
+                    dernier_visuel, dernier_type, "reuse")
+            if not chemin:
+                premier_mot = (requete or "").split()[0] if requete else ""
+                chemin = generer_image_secours(
+                    premier_mot or "Territoire Brut")
+                type_visuel, mode_visuel = "photo", "secours"
+                scenes_visuel_secours.append(s["id"])
+            print(f"[pipeline] Visuel scène {s['id']} : {mode_visuel} "
+                  f"({type_visuel}).")
+            if mode_visuel in ("normal", "generique", "secours"):
+                dernier_visuel, dernier_type = chemin, type_visuel
             if type_visuel == "photo" and photo_miniature is None:
                 photo_miniature = chemin
             credits_assets.append({"scene": s["id"], "visuel": chemin,
@@ -273,7 +302,8 @@ def run(sujet_nom=None, sans_upload=False):
             animer_scene(chemin, type_visuel, segment,
                          s["duree_reelle_s"], s.get("animation", "ken_burns_zoom_in"))
             segments.append(segment)
-        cp.etape("segments", {"nb_segments": len(segments)})
+        cp.etape("segments", {"nb_segments": len(segments),
+                              "scenes_visuel_secours": scenes_visuel_secours})
 
         # 10. Mixage : voix + musique + ambiance + sfx
         etape_courante = "mix"

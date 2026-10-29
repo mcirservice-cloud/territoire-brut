@@ -26,6 +26,11 @@ import time
 import requests
 
 TIMEOUT = 60
+# Timeout court pour les RECHERCHES (API) : une recherche doit répondre
+# vite ; un fournisseur lent ne doit pas manger tout le budget de la
+# scène à lui seul (run #12 : 300 s brûlés, puis abandon total).
+# Le téléchargement garde TIMEOUT (60 s).
+SEARCH_TIMEOUT = 20
 TAILLE_MAX_TELECHARGEMENT_OCTETS = 2_000_000_000  # 2 Go : un clip de
 # scène fait quelques dizaines de Mo ; au-delà, on refuse plutôt que
 # de charger tout le fichier en RAM (l'ancien r.content pouvait tuer
@@ -116,7 +121,7 @@ def pixabay_video(requete, dossier="cache/clips"):
     r = requests.get("https://pixabay.com/api/videos/",
                      params={"key": cle, "q": requete, "per_page": 5,
                              "video_type": "film", "min_width": 1280},
-                     timeout=TIMEOUT)
+                     timeout=SEARCH_TIMEOUT)
     r.raise_for_status()
     for video in r.json().get("hits", []):
         fichiers = video.get("videos", {})
@@ -144,7 +149,7 @@ def pixabay_photo(requete, dossier="cache/photos"):
     r = requests.get("https://pixabay.com/api/",
                      params={"key": cle, "q": requete, "per_page": 5,
                              "image_type": "photo", "min_width": 1280},
-                     timeout=TIMEOUT)
+                     timeout=SEARCH_TIMEOUT)
     r.raise_for_status()
     for photo in r.json().get("hits", []):
         url = photo.get("largeImageURL")
@@ -170,7 +175,7 @@ def pexels_video(requete, dossier="cache/clips"):
                      headers={"Authorization": cle},
                      params={"query": requete, "orientation": "landscape",
                              "per_page": 8},
-                     timeout=TIMEOUT)
+                     timeout=SEARCH_TIMEOUT)
     r.raise_for_status()
     for video in r.json().get("videos", []):
         fichiers = [f for f in video.get("video_files", [])
@@ -199,7 +204,7 @@ def pexels_photo(requete, dossier="cache/photos"):
                      headers={"Authorization": cle},
                      params={"query": requete, "orientation": "landscape",
                              "per_page": 5},
-                     timeout=TIMEOUT)
+                     timeout=SEARCH_TIMEOUT)
     r.raise_for_status()
     for photo in r.json().get("photos", []):
         lien = photo["src"]["large2x"]
@@ -219,7 +224,7 @@ def openverse_photo(requete, dossier="cache/photos"):
     r = requests.get("https://api.openverse.org/v1/images/",
                      params={"q": requete, "license_type": "commercial",
                              "page_size": 5},
-                     headers={"User-Agent": UA}, timeout=TIMEOUT)
+                     headers={"User-Agent": UA}, timeout=SEARCH_TIMEOUT)
     r.raise_for_status()
     for photo in r.json().get("results", []):
         url = photo.get("url")
@@ -247,7 +252,7 @@ def _wikimedia(requete, type_fichier, dossier):
                              "gsrnamespace": 6, "gsrlimit": 5,
                              "prop": "imageinfo", "iiprop": "url|extmetadata",
                              "format": "json"},
-                     headers={"User-Agent": UA}, timeout=TIMEOUT)
+                     headers={"User-Agent": UA}, timeout=SEARCH_TIMEOUT)
     r.raise_for_status()
     pages = r.json().get("query", {}).get("pages", {})
     for page in pages.values():
@@ -333,7 +338,12 @@ def trouver_visuel(requete, alternative=None, budget_s=BUDGET_VISUEL_SCENE_S):
                 break
             try:
                 chemin = fonction(req)
-            except Exception:
+            except Exception as exc:
+                # Plus jamais silencieux : la cause réelle (429, timeout,
+                # panne fournisseur) doit apparaître dans le journal du
+                # run, sinon le diagnostic suivant est impossible.
+                print(f"[visuel] {fonction.__name__} « {req} » : "
+                      f"{type(exc).__name__}")
                 continue
             if chemin:
                 return chemin, "video"
@@ -343,11 +353,57 @@ def trouver_visuel(requete, alternative=None, budget_s=BUDGET_VISUEL_SCENE_S):
                 break
             try:
                 chemin = fonction(req)
-            except Exception:
+            except Exception as exc:
+                print(f"[visuel] {fonction.__name__} « {req} » : "
+                      f"{type(exc).__name__}")
                 continue
             if chemin:
                 return chemin, "photo"
     return None, None
+
+
+def generer_image_secours(texte, dossier="cache/photos"):
+    """Image de secours 1080p, générée localement avec PIL (aucun réseau,
+    aucun fournisseur) : dégradé sombre + nom de l'animal au centre.
+    Utilisée UNIQUEMENT quand aucun vrai visuel n'a été trouvé, pour
+    qu'une scène sans visuel ne tue plus jamais toute la vidéo
+    (échec run #12, scène 1). Le Ken Burns l'anime comme une photo.
+    Renvoie le chemin de l'image."""
+    from PIL import Image, ImageDraw, ImageFont
+    os.makedirs(dossier, exist_ok=True)
+    largeur, hauteur = 1920, 1080
+    img = Image.new("RGB", (largeur, hauteur))
+    d = ImageDraw.Draw(img)
+    for y in range(hauteur):
+        r = int(20 + 30 * y / hauteur)
+        g = int(35 + 25 * y / hauteur)
+        b = int(20 + 15 * y / hauteur)
+        d.line([(0, y), (largeur, y)], fill=(r, g, b))
+    try:
+        police = ImageFont.truetype("DejaVuSans-Bold.ttf", 96)
+    except Exception:
+        police = ImageFont.load_default()
+    mot = (texte or "Territoire Brut").strip().title()
+    boite = d.textbbox((0, 0), mot, font=police)
+    largeur_texte = boite[2] - boite[0]
+    hauteur_texte = boite[3] - boite[1]
+    d.text(((largeur - largeur_texte) / 2,
+            (hauteur - hauteur_texte) / 2 - 40),
+           mot, font=police, fill=(240, 230, 200))
+    try:
+        police_petite = ImageFont.truetype("DejaVuSans.ttf", 40)
+    except Exception:
+        police_petite = ImageFont.load_default()
+    sous_titre = "Territoire Brut"
+    boite2 = d.textbbox((0, 0), sous_titre, font=police_petite)
+    d.text(((largeur - (boite2[2] - boite2[0])) / 2,
+            (hauteur - hauteur_texte) / 2 + 80),
+           sous_titre, font=police_petite, fill=(200, 190, 160))
+    chemin = os.path.join(
+        dossier,
+        "secours-" + hashlib.md5(mot.encode()).hexdigest() + ".jpg")
+    img.save(chemin, "JPEG", quality=90)
+    return chemin
 
 
 # --- Sons -------------------------------------------------------------
@@ -363,7 +419,7 @@ def freesound(requete, dossier="cache/sfx"):
         params={"query": requete, "filter": 'license:"Creative Commons 0"',
                 "fields": "id,name,previews,duration", "page_size": 5,
                 "token": cle},
-        timeout=TIMEOUT)
+        timeout=SEARCH_TIMEOUT)
     r.raise_for_status()
     for son in r.json().get("results", []):
         chemin = os.path.join(dossier, f"{son['id']}.mp3")
@@ -381,7 +437,7 @@ def xeno_canto(requete, dossier="cache/sfx"):
     if cle:
         params["key"] = cle
     r = requests.get("https://xeno-canto.org/api/3/recordings",
-                     params=params, timeout=TIMEOUT)
+                     params=params, timeout=SEARCH_TIMEOUT)
     r.raise_for_status()
     for enr in r.json().get("recordings", []):
         url = enr.get("file")
@@ -399,7 +455,7 @@ def openverse_audio(requete, dossier="cache/sfx"):
     r = requests.get("https://api.openverse.org/v1/audio/",
                      params={"q": requete, "license_type": "commercial",
                              "page_size": 5},
-                     headers={"User-Agent": UA}, timeout=TIMEOUT)
+                     headers={"User-Agent": UA}, timeout=SEARCH_TIMEOUT)
     r.raise_for_status()
     for son in r.json().get("results", []):
         url = son.get("url")
@@ -441,7 +497,7 @@ def musique_pixabay(humeur, dossier="cache/musique"):
     r = requests.get("https://pixabay.com/api/",
                      params={"key": cle, "q": requetes.get(humeur, "ambient"),
                              "per_page": 5, "category": "music"},
-                     timeout=TIMEOUT)
+                     timeout=SEARCH_TIMEOUT)
     r.raise_for_status()
     for piste in r.json().get("hits", []):
         url = piste.get("audio")
