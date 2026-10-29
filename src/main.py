@@ -122,7 +122,8 @@ def run(sujet_nom=None, sans_upload=False):
     from facts import fetch_facts
     from script_gen import (construire_prompt, generate_script)
     from fact_check import (fact_check, appliquer_fact_check,
-                            corriger_et_reverifier)
+                            corriger_et_reverifier,
+                            retirer_scenes_signalees)
     from topics import prochain_sujet, marquer_publie, lire_csv
     from voice import make_voice, concatener_voix
     from assets import (trouver_visuel, trouver_son, trouver_musique)
@@ -199,7 +200,7 @@ def run(sujet_nom=None, sans_upload=False):
             print(f"[pipeline] Fact-check : {nb_problemes} problème(s). "
                   "Correction automatique...")
             max_tentatives = (parametres.get("fact_check") or {}).get(
-                "correction_max_tentatives", 2)
+                "correction_max_tentatives", 4)
             scenes_a_verifier, journal_corr = corriger_et_reverifier(
                 script, faits, prompt_check, resultat,
                 max_tentatives=max_tentatives)
@@ -211,19 +212,37 @@ def run(sujet_nom=None, sans_upload=False):
                   "tentative(s), "
                   f"{len(scenes_a_verifier)} scène(s) encore signalée(s).")
         if scenes_a_verifier:
-            # Politique « Bloquer mais tout sauvegarder » : publication
-            # bloquée, MAIS script + signalements + problèmes + contexte
-            # sont persistés (blocage.json) pour relecture humaine.
-            cp.sauver_blocage(
-                script, scenes_a_verifier, resultat.get("problemes", []),
-                {"sujet": sujet["nom"], "source": source,
-                 "tentatives_correction": journal_corr,
-                 "faits_caracteres": len(faits)})
-            raise RuntimeError(
-                "Publication bloquée : scènes à vérifier : "
-                f"{scenes_a_verifier}. TOUT est sauvegardé dans "
-                f"{dossier_sortie}/ (script.json + blocage.json) pour "
-                "relecture humaine.")
+            # Auto-ajustement (décision Sam 2026-10-29, après run #11) :
+            # au lieu de bloquer pour 1 scène, on retire les scènes
+            # encore signalées — l'affirmation signalée n'est donc PAS
+            # publiée, ni avec avertissement, ni réécrite à l'aveugle —
+            # puis on poursuit le traitement avec le reste du script.
+            # Si le retrait laisserait moins de 20 scènes, on retombe
+            # sur « Bloquer mais tout sauvegarder ».
+            retires = retirer_scenes_signalees(script, scenes_a_verifier)
+            if retires:
+                cp.sauver_script(script)
+                cp.etape("scenes_retirees_fact_check",
+                         {"retirees": retires,
+                          "scenes_restantes": len(script["scenes"]),
+                          "tentatives_correction": journal_corr})
+                print(f"[pipeline] Auto-ajustement fact-check : scènes "
+                      f"retirées {retires}, "
+                      f"{len(script['scenes'])} scènes restantes. "
+                      f"Traitement poursuivi.")
+                scenes_a_verifier = []
+            else:
+                cp.sauver_blocage(
+                    script, scenes_a_verifier,
+                    resultat.get("problemes", []),
+                    {"sujet": sujet["nom"], "source": source,
+                     "tentatives_correction": journal_corr,
+                     "faits_caracteres": len(faits)})
+                raise RuntimeError(
+                    "Publication bloquée : scènes à vérifier : "
+                    f"{scenes_a_verifier}. TOUT est sauvegardé dans "
+                    f"{dossier_sortie}/ (script.json + blocage.json) pour "
+                    "relecture humaine.")
 
         # 5. Voix
         etape_courante = "voix"

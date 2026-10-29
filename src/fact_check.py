@@ -8,10 +8,18 @@ Un seul petit appel : on compare le script aux sources factuelles.
 Verdict : "ok" ou "a_corriger" + liste des problèmes par scène.
 Les scènes problématiques sont marquées "a_verifier": true dans le script.
 
-La boucle de correction est BORNÉE (corriger_et_reverifier, max 2
-tentatives par défaut, politique « Bloquer mais tout sauvegarder ») :
-épuisée, on bloque la publication mais on sauvegarde tout, jamais de
-publication avec avertissement.
+La boucle de correction est BORNÉE (corriger_et_reverifier, max 4
+tentatives par défaut, voir run #11) : le fact-check ne converge pas
+toujours — chaque correction peut faire apparaître une nouvelle scène
+signalée (run #11 : 6 problèmes initiaux, puis 5, puis 1 scène neuve,
+la 63, « Il l'étrangle rapidement. »). Après les tentatives, les
+scènes encore signalées sont donc RETIRÉES du script par
+retirer_scenes_signalees (décision Sam 2026-10-29 : auto-ajuster pour
+ne plus bloquer, poursuivre le traitement) — jamais publiées avec
+avertissement, jamais réécrites avec une nouvelle affirmation inventée :
+l'affirmation signalée disparaît avec sa scène. Sauvegarde : si le
+retrait laisserait moins de 20 scènes, on bloque toujours mais on
+sauvegarde tout, comme avant.
 """
 
 import json
@@ -20,7 +28,15 @@ import os
 from llm_chain import appeler_reflexion, au_moins_une_cle, charger_json
 
 MODELE = "gemini-3.8-flash"  # conservé pour compatibilité (2e de la réflexion)
-CORRECTION_MAX_TENTATIVES = 2
+CORRECTION_MAX_TENTATIVES = 4  # augmenté après run #11 (2 insuffisants, non-convergence)
+ANIMATIONS = [
+    "ken_burns_zoom_in",
+    "ken_burns_zoom_out",
+    "travelling_gauche",
+    "travelling_droite",
+    "parallaxe",
+    "clip_ia",
+]
 
 
 def _exiger_une_cle(usage):
@@ -127,6 +143,7 @@ def corriger_et_reverifier(script, faits, prompt_check, resultat_initial,
                 "scenes_signalees": scenes,
                 "corrections_appliquees": nb_corrigees,
                 "problemes_apres": nb_problemes,
+                "problemes": resultat.get("problemes", []),
                 "verdict": resultat.get("verdict"),
             })
             if nb_problemes == 0:
@@ -141,6 +158,41 @@ def corriger_et_reverifier(script, faits, prompt_check, resultat_initial,
     scenes_restantes = [s["id"] for s in script.get("scenes", [])
                         if s.get("a_verifier")]
     return scenes_restantes, journal
+
+
+def retirer_scenes_signalees(script, ids_a_retirer):
+    """Auto-ajustement final (run #11) : retire les scènes encore
+    signalées après les tentatives de correction, puis renumérote et
+    répare les animations répétées créées par le retrait.
+
+    Renvoie la liste des ids retirés (anciens ids). Ne retire rien si
+    le script restant aurait moins de 20 scènes : l'appelant doit
+    alors bloquer comme avant. N'invente aucune affirmation : la scène
+    signalée disparaît entièrement, avec sa narration.
+    """
+    ids = set(ids_a_retirer or [])
+    if not ids:
+        return []
+    restantes = [s for s in script.get("scenes", [])
+                 if s.get("id") not in ids]
+    if len(restantes) < 20:
+        return []
+    retires = [s.get("id") for s in script.get("scenes", [])
+               if s.get("id") in ids]
+    script["scenes"] = restantes
+    precedent = None
+    for i, s in enumerate(restantes, start=1):
+        s["id"] = i
+        s.pop("a_verifier", None)
+        anim = s.get("animation")
+        if anim == precedent:
+            nouveau = next((a for a in ANIMATIONS
+                            if a != precedent and a != "clip_ia"),
+                           "ken_burns_zoom_out")
+            s["animation"] = nouveau
+            anim = nouveau
+        precedent = anim
+    return retires
 
 
 def appliquer_corrections(script, corrections):
