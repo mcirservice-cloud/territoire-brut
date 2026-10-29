@@ -11,10 +11,9 @@ chaine:
   categorie_youtube: 15  # Animaux (Pets & Animals)
 
 voix:
-  moteur: "edge-tts"
-  voix: "fr-FR-HenriNeural"
-  rate: "-5%"
-  pitch: "-2Hz"
+  moteur: "kokoro"
+  voix: "ff_siwis"  # seule voix française du modèle Kokoro-82M officiel
+  vitesse: 1.0
   pause_entre_scenes_s: 0.4
 
 video:
@@ -36,6 +35,21 @@ script:
 
 fact_check:
   modele_gemini: "gemini-3.8-flash"  # la même clé Gemini que le script
+
+llm_chaine:
+  # Chaîne de secours pour le scénario et le fact-check (règle : chaque
+  # tâche a au moins deux alternatives). Le premier fournisseur qui répond
+  # gagne ; une couche sans clé est ignorée (log, pas d'erreur).
+  # Aucune clé ici : elles viennent des variables d'environnement.
+  gemini_modeles:
+    - "gemini-3.8-flash"
+    - "gemini-3.5-flash"  # même clé GEMINI_API_KEY, autre modèle
+  deepseek_modele: "deepseek-chat"  # clé DEEPSEEK_API_KEY
+  openrouter_modele_payant: "z-ai/glm-5.3-flash"  # clé OPENROUTER_API_KEY ; très bon marché (prix officiel Z.ai ~0,15 $/M entrée, 0,50 $/M sortie)
+  openrouter_modeles_gratuits:
+    - "google/gemma-4-31b-it:free"  # gratuit, mais le catalogue :free change souvent
+  openrouter_secours_auto: "openrouter/free"  # routeur gratuit automatique, dernier recours
+  delais_reessai_s: [30, 60, 120]  # réessais sur erreurs temporaires (429/5xx)
 
 visuels:
   priorite: "openverse"  # Openverse (photos, sans clé) puis Wikimedia (photos + vidéos, sans clé)
