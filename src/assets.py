@@ -6,7 +6,12 @@ Priorité (gratuits, sans clé obligatoire) :
 Secours (seulement si leurs clés sont présentes) :
 - Pixabay, Pexels, Freesound, Xeno-canto.
 
-- 1 requête par scène maximum.
+- 1 requête par scène maximum, mais chaque requête est essayée sous
+  plusieurs formes : phrase complète, puis simplifiée mot à mot par la
+  fin jusqu'au premier mot (ex. « cheetah running fast dry grass » →
+  « cheetah running fast » → « cheetah running » → « cheetah »). Une
+  requête trop précise ne tue donc plus le run : la forme la plus
+  simple (souvent le nom de l'animal) trouve presque toujours un visuel.
 - Cache local + journal d'usage (cache/usage_log.json) : un clip déjà
   utilisé dans une vidéo récente n'est pas réutilisé.
 - Attributions (titre, auteur, licence) journalisées dans
@@ -263,28 +268,49 @@ def wikimedia_photo(requete, dossier="cache/photos"):
     return chemin
 
 
+def _formes_requete(requete):
+    """Formes d'une requête, de la plus précise à la plus simple :
+    phrase complète, puis un mot de moins à chaque fois, jusqu'au
+    premier mot. Ex. : « cheetah running fast dry grass » →
+    « cheetah running fast » → « cheetah running » → « cheetah »."""
+    mots = (requete or "").split()
+    return [" ".join(mots[:n]) for n in range(len(mots), 0, -1)]
+
+
 def trouver_visuel(requete, alternative=None):
     """Visuel pour une scène : clip vidéo d'abord, sinon photo animée.
     Ordre : vidéo Wikimedia, Pixabay, Pexels (si clés), puis photo
     Openverse, Wikimedia, Pixabay, Pexels. Renvoie (chemin, type).
-    Un fournisseur en panne est simplement ignoré (on passe au suivant)."""
-    for fonction in (wikimedia_video, pixabay_video, pexels_video):
-        try:
-            chemin = fonction(requete)
-        except Exception:
-            continue
-        if chemin:
-            return chemin, "video"
-    for fonction in (openverse_photo, wikimedia_photo,
-                     pixabay_photo, pexels_photo):
-        try:
-            chemin = fonction(requete)
-        except Exception:
-            continue
-        if chemin:
-            return chemin, "photo"
+    Un fournisseur en panne est simplement ignoré (on passe au suivant).
+    Chaque requête est essayée sous ses formes simplifiées successives,
+    puis avec la requête alternative si elle existe : une requête trop
+    précise ne bloque plus la scène."""
+    requetes = _formes_requete(requete)
     if alternative:
-        return trouver_visuel(alternative)
+        requetes += _formes_requete(alternative)
+    vues = set()
+    for req in requetes:
+        if req in vues:
+            continue
+        vues.add(req)
+        if req != requete:
+            print(f"[visuel] Aucun résultat pour la forme précédente, "
+                  f"essai simplifié : « {req} »")
+        for fonction in (wikimedia_video, pixabay_video, pexels_video):
+            try:
+                chemin = fonction(req)
+            except Exception:
+                continue
+            if chemin:
+                return chemin, "video"
+        for fonction in (openverse_photo, wikimedia_photo,
+                         pixabay_photo, pexels_photo):
+            try:
+                chemin = fonction(req)
+            except Exception:
+                continue
+            if chemin:
+                return chemin, "photo"
     return None, None
 
 
