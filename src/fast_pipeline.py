@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from main import (charger_parametres, cles_manquantes, erreur_cles,
+from main import (charger_parametres, erreur_cles,
                   charger_bibliotheques, _boucler_audio)
 
 
@@ -52,9 +52,8 @@ def stage_prepare(sujet_nom=None):
     dossier_sortie = parametres["dossiers"]["sortie"]
     os.makedirs(dossier_sortie, exist_ok=True)
     cp = Checkpoint(dossier_sortie)
-    manquantes = cles_manquantes()
-    if manquantes:
-        raise RuntimeError(erreur_cles(manquantes))
+    if not os.environ.get("GEMINI_API_KEY"):
+        raise RuntimeError(erreur_cles(["GEMINI_API_KEY"]))
 
     if sujet_nom:
         sujet = next((s for s in lire_csv() if s["nom"] == sujet_nom), None)
@@ -237,9 +236,11 @@ def stage_assemble(script_path, sujet_path, dossiers_shards,
     dossier_cache = parametres["dossiers"]["cache"]
     os.makedirs(dossier_sortie, exist_ok=True)
     cp = Checkpoint(dossier_sortie)
-    manquantes = cles_manquantes()
-    if manquantes:
-        raise RuntimeError(erreur_cles(manquantes))
+    manquantes_yt = [c for c in
+                     ("YT_CLIENT_ID", "YT_CLIENT_SECRET", "YT_REFRESH_TOKEN")
+                     if not os.environ.get(c)]
+    if manquantes_yt:
+        raise RuntimeError(erreur_cles(manquantes_yt))
     script = _charger_script(script_path)
     with open(sujet_path, encoding="utf-8") as f:
         sujet_info = json.load(f)
