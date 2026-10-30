@@ -1,10 +1,21 @@
 name: Produire et publier une vidéo
 
+# Chemin classique (1 job) : conservé comme secours si le chemin
+# rapide échoue. Les garde-fous du code (src/gardefous.py) s'y
+# appliquent aussi : annulation immédiate avec code G001-G012 dès
+# qu'aucune vidéo ne pourra être fournie.
 on:
   schedule:
     - cron: "0 5 * * *"     # 05:00 UTC (vidéo du matin)
     - cron: "0 14 * * *"    # 14:00 UTC (vidéo de l'après-midi)
   workflow_dispatch:         # lancement manuel possible
+
+# Jamais deux vidéos en cours en même temps : la suivante attend,
+# on ne tue jamais une vidéo en cours et on ne produit jamais deux
+# fois le même sujet.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
 
 jobs:
   produce:
@@ -19,17 +30,43 @@ jobs:
           cache: pip
 
       - name: Installer FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu
 
       - name: Dépendances Python
         run: pip install -r requirements.txt
 
-      - name: Cache clips et sons
+      # Modèle de voix Kokoro en cache : évite un téléchargement
+      # (~300 Mo) à chaque run. Clé stable, pas liée au run.
+      - name: Cache modèle voix
         uses: actions/cache@v4
         with:
-          path: cache
-          key: assets-${{ github.run_id }}
-          restore-keys: assets-
+          path: ~/.cache/huggingface
+          key: hf-${{ hashFiles('requirements.txt') }}
+
+      # Cache CORRIGÉ : l'ancienne clé assets-<run_id> ne servait à
+      # rien (unique à chaque run) et, pire, restaurer tout cache/
+      # réutilisait de vieilles voix (nommées par n° de scène, pas
+      # par contenu) pour une nouvelle narration. On ne met en cache
+      # que les visuels/sons, nommés par id fournisseur, jamais
+      # cache/voice ni cache/segments.
+      - name: Cache visuels et sons
+        uses: actions/cache@v4
+        with:
+          path: |
+            cache/photos
+            cache/clips
+            cache/sfx
+            cache/musique
+          key: assets-${{ hashFiles('src/assets.py', 'config/settings.yaml') }}
+
+      # Garde-fou niveau workflow : si le code est cassé, on échoue
+      # en secondes, AVANT tout appel LLM, voix ou rendu.
+      - name: Tests rapides
+        run: |
+          python3 tests/test_smoke_v2.py
+          python3 tests/test_fast_pipeline.py
+          python3 tests/test_gardefous.py
+          python3 tests/test_openrouter_first.py
 
       - name: Produire la vidéo
         env:
@@ -47,6 +84,12 @@ jobs:
           SHEET_ID: ${{ secrets.SHEET_ID }}
           SHEETS_REFRESH_TOKEN: ${{ secrets.SHEETS_REFRESH_TOKEN }}
         run: python -u src/main.py
+
+      # Rapport garde-fou lisible directement dans le journal,
+      # sans télécharger l'artefact.
+      - name: Rapport garde-fou
+        if: always()
+        run: test -f output/echec-garde-fou.json && cat output/echec-garde-fou.json || echo "aucun échec garde-fou"
 
       - name: Archiver la vidéo (relecture humaine)
         # if: always() : même si la production échoue (ex. blocage
