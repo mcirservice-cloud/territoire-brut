@@ -132,6 +132,9 @@ def run(sujet_nom=None, sans_upload=False):
     from mix import mix_audio
     from render import generer_srt, assembler, valider_frames
     from thumbnail import make_thumbnail
+    from gardefous import (verifier_script, verifier_voix,
+                           verifier_segment, verifier_rendu,
+                           verifier_miniature, verifier_upload)
     from shorts import extraire_shorts
     from upload import upload, upload_short, calculer_publish_at
 
@@ -177,6 +180,7 @@ def run(sujet_nom=None, sans_upload=False):
         prompt = construire_prompt(modele_prompt, sujet, faits,
                                    sfx_autorises, ambiances_autorisees)
         script = generate_script(prompt, sfx_autorises, ambiances_autorisees)
+        verifier_script(script, duree_cible_min=sujet.get("duree"))
         print(f"[pipeline] Script : {len(script['scenes'])} scènes, "
               f"titre « {script['meta']['titre']} ».")
         cp.sauver_script(script)
@@ -249,6 +253,7 @@ def run(sujet_nom=None, sans_upload=False):
         etape_courante = "voix"
         scenes = make_voice(script["scenes"],
                             os.path.join(dossier_cache, "voice"))
+        verifier_voix(scenes)
         duree_totale = sum(s["duree_reelle_s"] for s in scenes)
         print(f"[pipeline] Voix : durée réelle {duree_totale:.0f} s.")
         cp.etape("voix", {"duree_totale_s": round(duree_totale, 2)})
@@ -301,6 +306,7 @@ def run(sujet_nom=None, sans_upload=False):
             os.makedirs(os.path.dirname(segment), exist_ok=True)
             animer_scene(chemin, type_visuel, segment,
                          s["duree_reelle_s"], s.get("animation", "ken_burns_zoom_in"))
+            verifier_segment(segment, s["duree_reelle_s"], s["id"])
             segments.append(segment)
         cp.etape("segments", {"nb_segments": len(segments),
                               "scenes_visuel_secours": scenes_visuel_secours})
@@ -347,6 +353,7 @@ def run(sujet_nom=None, sans_upload=False):
         srt = os.path.join(dossier_sortie, f"{base}.srt")
         generer_srt(scenes, srt)
         assembler(segments, audio_final, video_finale, srt)
+        verifier_rendu(video_finale, duree_totale)
         print(f"[pipeline] Vidéo rendue : {video_finale}.")
         params_frames = parametres.get("validation_frames") or {}
         rapport_frames = valider_frames(
@@ -376,6 +383,7 @@ def run(sujet_nom=None, sans_upload=False):
         miniature = os.path.join(dossier_sortie, f"{base}-miniature.jpg")
         make_thumbnail(photo_miniature, meta["miniature"]["texte"], miniature,
                        meta["miniature"].get("emotion", "danger"))
+        verifier_miniature(miniature)
         cp.etape("miniature", {"fichier": miniature})
 
         # Crédits (sources, licences)
@@ -396,6 +404,7 @@ def run(sujet_nom=None, sans_upload=False):
             video_id = upload(video_finale, miniature, meta, publish_at,
                               parametres["publication"].get("privacy_status",
                                                            "private"))
+            verifier_upload(video_id)
             print(f"[pipeline] Vidéo uploadée en privé/planifiée : {video_id} "
                   f"(publication : {publish_at}).")
             for short in extraire_shorts(video_finale, script):
