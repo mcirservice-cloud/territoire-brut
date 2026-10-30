@@ -78,6 +78,8 @@ def extraire_json(texte):
 
 def charger_json(texte):
     """json.loads, avec extraction tolérante en secours."""
+    if not texte or not str(texte).strip():
+        raise ValueError("texte vide, aucun JSON à extraire")
     try:
         return json.loads(texte)
     except json.JSONDecodeError:
@@ -175,9 +177,12 @@ def _appeler_gemini_rest(cle, modele, prompt, temperature, delais,
             raise RuntimeError(f"{modele} : erreur réseau ({e})")
         if r.status_code == 200:
             try:
-                return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                texte = r.json()["candidates"][0]["content"]["parts"][0]["text"]
             except (KeyError, IndexError, ValueError) as e:
                 raise RuntimeError(f"{modele} : réponse inattendue ({e})")
+            if not texte or not str(texte).strip():
+                raise RuntimeError(f"{modele} : réponse vide (text null)")
+            return texte
         if r.status_code in (429, 500, 502, 503, 504) and tentative <= len(delais):
             _attendre(delais, tentative, modele, f"HTTP {r.status_code}", journal)
             continue
@@ -217,9 +222,12 @@ def _appeler_openai_compatible(url, cle, modele, prompt, temperature, delais,
                 break
             if r.status_code == 200:
                 try:
-                    return r.json()["choices"][0]["message"]["content"]
+                    contenu = r.json()["choices"][0]["message"]["content"]
                 except (KeyError, IndexError, ValueError) as e:
                     raise RuntimeError(f"{modele} : réponse inattendue ({e})")
+                if not contenu or not str(contenu).strip():
+                    raise RuntimeError(f"{modele} : réponse vide (content null)")
+                return contenu
             if r.status_code == 400 and mode_json:
                 continue
             statut, message = r.status_code, r.text[:200]

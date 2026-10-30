@@ -217,7 +217,7 @@ def generate_script(prompt, sfx_autorises=None, ambiances_autorisees=None,
             data = charger_json(texte)
             validate(data, sfx_autorises, ambiances_autorisees)
             return data
-        except (ValueError, ScriptInvalide) as e:
+        except (ValueError, ScriptInvalide, TypeError) as e:
             derniere_erreur = e
             print(f"[script] Essai {essai}/{essais} invalide : {e}")
             # Correction auto : si le JSON a été lu, on corrige ce qui
