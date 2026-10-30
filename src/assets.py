@@ -30,14 +30,16 @@ TIMEOUT = 60
 # vite ; un fournisseur lent ne doit pas manger tout le budget de la
 # scène à lui seul (run #12 : 300 s brûlés, puis abandon total).
 # Le téléchargement garde TIMEOUT (60 s).
-SEARCH_TIMEOUT = 20
+SEARCH_TIMEOUT = 10
 TAILLE_MAX_TELECHARGEMENT_OCTETS = 2_000_000_000  # 2 Go : un clip de
 # scène fait quelques dizaines de Mo ; au-delà, on refuse plutôt que
 # de charger tout le fichier en RAM (l'ancien r.content pouvait tuer
 # le runner sur un gros fichier).
-BUDGET_VISUEL_SCENE_S = 300  # plafond par scène pour la recherche
-# (formes simplifiées × fournisseurs) : au-delà, on échoue vite avec
-# un message clair au lieu de brûler le budget du job.
+BUDGET_VISUEL_SCENE_S = 120  # plafond par scène pour la recherche
+# (formes simplifiées × fournisseurs) : au-delà, on passe au secours
+# (générique / réutilisation / image locale) au lieu de brûler le
+# budget du job. Run #13 : 300 s par scène × 56 scènes + rendu ont
+# dépassé la limite GitHub de 2 h (46/56 scènes seulement).
 JOURNAL = "cache/usage_log.json"
 INTERDIT_NB_VIDEOS = 5
 
@@ -306,20 +308,40 @@ def _formes_requete(requete):
     return [" ".join(mots[:n]) for n in range(len(mots), 0, -1)]
 
 
+def _formes_courtes(requete):
+    """Formes utiles seulement : phrase complète, 3 premiers mots,
+    1er mot. Les formes intermédiaires (un mot de moins à chaque fois)
+    échouent presque toujours comme la forme complète quand les
+    fournisseurs sont en panne, et coûtent chacune plusieurs appels :
+    run #13, c'est ce qui a mangé le budget de 2 h."""
+    mots = (requete or "").split()
+    if not mots:
+        return []
+    formes = [" ".join(mots), " ".join(mots[:3]), mots[0]]
+    vues, uniques = set(), []
+    for forme in formes:
+        if forme not in vues:
+            vues.add(forme)
+            uniques.append(forme)
+    return uniques
+
+
 def trouver_visuel(requete, alternative=None, budget_s=BUDGET_VISUEL_SCENE_S):
     """Visuel pour une scène : clip vidéo d'abord, sinon photo animée.
     Ordre : vidéo Wikimedia, Pixabay, Pexels (si clés), puis photo
     Openverse, Wikimedia, Pixabay, Pexels. Renvoie (chemin, type).
     Un fournisseur en panne est simplement ignoré (on passe au suivant).
-    Chaque requête est essayée sous ses formes simplifiées successives,
-    puis avec la requête alternative si elle existe : une requête trop
-    précise ne bloque plus la scène.
-    Budget : la recherche s'arrête après budget_s secondes (défaut 300)
+    Formes courtes seulement (complète, 3 mots, 1 mot), puis requête
+    alternative si elle existe. Les clips vidéo ne sont cherchés que
+    sur la forme complète : dans le run #13, toutes les scènes ont
+    fini en photo, les recherches vidéo sur les formes simplifiées
+    ne faisaient que perdre du temps.
+    Budget : la recherche s'arrête après budget_s secondes (défaut 120)
     et renvoie (None, None) avec un log clair — mieux vaut un échec
     rapide et lisible qu'une recherche qui mange le budget du job."""
-    requetes = _formes_requete(requete)
+    requetes = _formes_courtes(requete)
     if alternative:
-        requetes += _formes_requete(alternative)
+        requetes += _formes_courtes(alternative)
     vues = set()
     echeance = time.monotonic() + budget_s
     for req in requetes:
@@ -333,7 +355,10 @@ def trouver_visuel(requete, alternative=None, budget_s=BUDGET_VISUEL_SCENE_S):
         if req != requete:
             print(f"[visuel] Aucun résultat pour la forme précédente, "
                   f"essai simplifié : « {req} »")
-        for fonction in (wikimedia_video, pixabay_video, pexels_video):
+        # Vidéo seulement sur la forme complète (voir docstring).
+        fonctions_video = (wikimedia_video, pixabay_video, pexels_video) \
+            if req == requete else ()
+        for fonction in fonctions_video:
             if time.monotonic() > echeance:
                 break
             try:

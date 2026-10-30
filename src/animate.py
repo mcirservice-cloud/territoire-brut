@@ -27,10 +27,15 @@ def ken_burns(image, sortie, duree, mode="zoom_in", fps=FPS):
         z, x, y = "1.25", f"(iw-iw/zoom)*(1-on/{nb_images})", "ih/2-(ih/zoom/2)"
     else:  # travelling_droite
         z, x, y = "1.25", f"(iw-iw/zoom)*(on/{nb_images})", "ih/2-(ih/zoom/2)"
-    vf = (f"scale=3840:-2,zoompan=z='{z}':x='{x}':y='{y}':d={nb_images}:"
+    # Vitesse run #13 : l'ancien suréchantillonnage 3840 (2x la sortie)
+    # et le preset « fast » coûtaient ~2 min par scène. 2880 donne
+    # encore une marge de zoom de 1,5x pour une sortie 1920 (zoom max
+    # 1,35x), et « veryfast » divise le temps d'encodage sans changer
+    # la résolution de sortie.
+    vf = (f"scale=2880:-2,zoompan=z='{z}':x='{x}':y='{y}':d={nb_images}:"
           f"s={LARGEUR}x{HAUTEUR}:fps={fps},format=yuv420p")
     run_cmd(["ffmpeg", "-y", "-loop", "1", "-i", image, "-vf", vf,
-             "-t", str(duree), "-c:v", "libx264", "-preset", "fast",
+             "-t", str(duree), "-c:v", "libx264", "-preset", "veryfast",
              sortie], timeout=600)
     return sortie
 
