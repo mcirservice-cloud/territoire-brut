@@ -30,12 +30,12 @@ TIMEOUT = 60
 # vite ; un fournisseur lent ne doit pas manger tout le budget de la
 # scène à lui seul (run #12 : 300 s brûlés, puis abandon total).
 # Le téléchargement garde TIMEOUT (60 s).
-SEARCH_TIMEOUT = 10
+SEARCH_TIMEOUT = 5
 TAILLE_MAX_TELECHARGEMENT_OCTETS = 2_000_000_000  # 2 Go : un clip de
 # scène fait quelques dizaines de Mo ; au-delà, on refuse plutôt que
 # de charger tout le fichier en RAM (l'ancien r.content pouvait tuer
 # le runner sur un gros fichier).
-BUDGET_VISUEL_SCENE_S = 120  # plafond par scène pour la recherche
+BUDGET_VISUEL_SCENE_S = 20  # plafond par scène, mode rapide (<20 min) : au-delà, secours immédiat
 # (formes simplifiées × fournisseurs) : au-delà, on passe au secours
 # (générique / réutilisation / image locale) au lieu de brûler le
 # budget du job. Run #13 : 300 s par scène × 56 scènes + rendu ont

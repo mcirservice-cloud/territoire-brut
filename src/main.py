@@ -275,7 +275,7 @@ def run(sujet_nom=None, sans_upload=False):
                     if not generique:
                         continue
                     chemin, type_visuel = trouver_visuel(
-                        generique, budget_s=30)
+                        generique, budget_s=10)
                     if chemin:
                         mode_visuel = "generique"
                         break
