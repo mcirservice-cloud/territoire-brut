@@ -7,10 +7,19 @@ name: Produire vite (< 20 min, parallèle)
 on:
   workflow_dispatch:
 
+# Jamais deux vidéos rapides en cours en même temps : la suivante
+# attend, on ne tue jamais une vidéo en cours.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 15 min : les garde-fous échouent en secondes si le script est
+    # impossible ; ce timeout n'est qu'un filet de sécurité pour les
+    # appels LLM lents (le run #2 a montré que 10 min ne suffisent pas).
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -18,9 +27,17 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Installer FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu
       - name: Dépendances Python
         run: pip install -r requirements.txt
+      # Garde-fou niveau workflow : si le code est cassé, on échoue
+      # en secondes, AVANT tout appel LLM.
+      - name: Tests rapides
+        run: |
+          python3 tests/test_smoke_v2.py
+          python3 tests/test_fast_pipeline.py
+          python3 tests/test_gardefous.py
+          python3 tests/test_openrouter_first.py
       - name: Préparer script + fact-check
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -28,6 +45,9 @@ jobs:
           SHEET_ID: ${{ secrets.SHEET_ID }}
           SHEETS_REFRESH_TOKEN: ${{ secrets.SHEETS_REFRESH_TOKEN }}
         run: python -u src/fast_pipeline.py --stage prepare
+      - name: Rapport garde-fou
+        if: always()
+        run: test -f output/echec-garde-fou.json && cat output/echec-garde-fou.json || echo "aucun échec garde-fou"
       - name: Archiver script
         if: always()
         uses: actions/upload-artifact@v4
@@ -41,6 +61,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
+      # fail-fast: false : un shard en panne n'annule pas les autres,
+      # mais assemble est ignoré si un seul shard échoue (needs) :
+      # jamais de vidéo partielle publiée.
       fail-fast: false
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
@@ -51,9 +74,16 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Installer FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu
       - name: Dépendances Python
         run: pip install -r requirements.txt
+      # Modèle Kokoro en cache : sinon chaque shard retélécharge
+      # le modèle (~300 Mo), 10 fois par vidéo.
+      - name: Cache modèle voix
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ hashFiles('requirements.txt') }}
       - name: Télécharger script
         uses: actions/download-artifact@v4
         with:
@@ -61,6 +91,9 @@ jobs:
           path: output
       - name: Voix + visuels + animation (shard)
         run: python -u src/fast_pipeline.py --stage segments --shard-index ${{ matrix.shard }} --shard-count 10
+      - name: Rapport garde-fou
+        if: always()
+        run: test -f output/echec-garde-fou.json && cat output/echec-garde-fou.json || echo "aucun échec garde-fou"
       - name: Archiver shard
         if: always()
         uses: actions/upload-artifact@v4
@@ -80,7 +113,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Installer FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu
       - name: Dépendances Python
         run: pip install -r requirements.txt
       - name: Télécharger script
@@ -102,6 +135,9 @@ jobs:
           SHEET_ID: ${{ secrets.SHEET_ID }}
           SHEETS_REFRESH_TOKEN: ${{ secrets.SHEETS_REFRESH_TOKEN }}
         run: python -u src/fast_pipeline.py --stage assemble
+      - name: Rapport garde-fou
+        if: always()
+        run: test -f output/echec-garde-fou.json && cat output/echec-garde-fou.json || echo "aucun échec garde-fou"
       - name: Archiver vidéo
         if: always()
         uses: actions/upload-artifact@v4
