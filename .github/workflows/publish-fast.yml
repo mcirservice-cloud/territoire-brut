@@ -1,0 +1,111 @@
+name: Produire vite (< 20 min, parallèle)
+
+# Lancement manuel UNIQUEMENT pour le moment : pas de cron ici, pour
+# ne pas doubler les runs planifiés de publish.yml (05:00 / 14:00 UTC).
+# Si le test rapide est prouvé < 20 min, le cron basculera ici avec
+# l'accord de Sam, et publish.yml sera mis en pause.
+on:
+  workflow_dispatch:
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Installer FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
+      - name: Dépendances Python
+        run: pip install -r requirements.txt
+      - name: Préparer script + fact-check
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          SHEETS_REFRESH_TOKEN: ${{ secrets.SHEETS_REFRESH_TOKEN }}
+        run: python -u src/fast_pipeline.py --stage prepare
+      - name: Archiver script
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prepare
+          path: output/
+          retention-days: 3
+
+  segments:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Installer FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
+      - name: Dépendances Python
+        run: pip install -r requirements.txt
+      - name: Télécharger script
+        uses: actions/download-artifact@v4
+        with:
+          name: prepare
+          path: output
+      - name: Voix + visuels + animation (shard)
+        run: python -u src/fast_pipeline.py --stage segments --shard-index ${{ matrix.shard }} --shard-count 10
+      - name: Archiver shard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.shard }}
+          path: output/shard-${{ matrix.shard }}
+          retention-days: 3
+
+  assemble:
+    needs: segments
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Installer FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
+      - name: Dépendances Python
+        run: pip install -r requirements.txt
+      - name: Télécharger script
+        uses: actions/download-artifact@v4
+        with:
+          name: prepare
+          path: output
+      - name: Télécharger shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: shard-*
+          path: output
+          merge-multiple: false
+      - name: Assembler + publier
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          SHEETS_REFRESH_TOKEN: ${{ secrets.SHEETS_REFRESH_TOKEN }}
+        run: python -u src/fast_pipeline.py --stage assemble
+      - name: Archiver vidéo
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-${{ github.run_id }}
+          path: output/
+          retention-days: 3
