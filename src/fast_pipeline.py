@@ -26,6 +26,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from main import (charger_parametres, erreur_cles,
                   charger_bibliotheques, _boucler_audio)
+from gardefous import (EchecGardeFou, verifier_environnement,
+                       verifier_script, verifier_scenes_min,
+                       verifier_voix, verifier_segment,
+                       verifier_manifests, verifier_rendu,
+                       verifier_miniature, verifier_upload,
+                       ecrire_echec)
 
 
 def _charger_script(chemin):
@@ -48,6 +54,7 @@ def stage_prepare(sujet_nom=None):
                             retirer_scenes_signalees)
     from topics import prochain_sujet, lire_csv
 
+    verifier_environnement()
     parametres = charger_parametres()
     dossier_sortie = parametres["dossiers"]["sortie"]
     os.makedirs(dossier_sortie, exist_ok=True)
@@ -66,6 +73,9 @@ def stage_prepare(sujet_nom=None):
     print(f"[rapide] Sujet : {sujet['nom']} (source : {source}).")
 
     faits = fetch_facts(sujet)
+    if len(faits) < 500:
+        from gardefous import echec as _echec
+        _echec("G003", f"faits trop courts : {len(faits)} caractères")
     print(f"[rapide] Faits : {len(faits)} caractères.")
     cp.sauver_faits(faits)
     cp.etape("faits", {"sujet": sujet["nom"], "source": source,
@@ -77,6 +87,7 @@ def stage_prepare(sujet_nom=None):
     prompt = construire_prompt(modele_prompt, sujet, faits,
                                sfx_autorises, ambiances_autorisees)
     script = generate_script(prompt, sfx_autorises, ambiances_autorisees)
+    verifier_script(script, duree_cible_min=sujet.get("duree"))
     print(f"[rapide] Script : {len(script['scenes'])} scènes, "
           f"titre « {script['meta']['titre']} ».")
     cp.sauver_script(script)
@@ -122,9 +133,11 @@ def stage_prepare(sujet_nom=None):
                 {"sujet": sujet["nom"], "source": source,
                  "tentatives_correction": journal_corr,
                  "faits_caracteres": len(faits)})
-            raise RuntimeError(
+            raise EchecGardeFou(
+                "G005",
                 "Publication bloquée : scènes à vérifier : "
                 f"{scenes_a_verifier}. TOUT est sauvegardé.")
+    verifier_scenes_min(script["scenes"])
     # Le sujet est conservé avec le script pour l'étape assemble.
     with open(os.path.join(dossier_sortie, "sujet.json"), "w",
               encoding="utf-8") as f:
@@ -139,13 +152,16 @@ def stage_segments(script_path, shard_index, shard_count, dossier_sortie):
     from assets import trouver_visuel, generer_image_secours
     from animate import animer_scene
 
+    verifier_environnement()
     parametres = charger_parametres()
     dossier_cache = parametres["dossiers"]["cache"]
     script = _charger_script(script_path)
+    verifier_script(script)
     scenes = decouper_scenes(script["scenes"], shard_count, shard_index)
     print(f"[rapide] Shard {shard_index}/{shard_count} : "
           f"{len(scenes)} scènes.")
     scenes = make_voice(scenes, os.path.join(dossier_cache, "voice"))
+    verifier_voix(scenes)
     dossier_shard = os.path.join(dossier_sortie, f"shard-{shard_index}")
     os.makedirs(os.path.join(dossier_cache, "segments"), exist_ok=True)
     os.makedirs(dossier_shard, exist_ok=True)
@@ -185,6 +201,7 @@ def stage_segments(script_path, shard_index, shard_count, dossier_sortie):
         animer_scene(chemin, type_visuel, segment,
                      s["duree_reelle_s"],
                      s.get("animation", "ken_burns_zoom_in"))
+        verifier_segment(segment, s["duree_reelle_s"], s["id"])
         manifest.append({
             "id": s["id"], "segment": segment,
             "voice_path": s["voice_path"],
@@ -195,6 +212,13 @@ def stage_segments(script_path, shard_index, shard_count, dossier_sortie):
             "sfx": s.get("sfx", []), "visuel": chemin,
             "type_visuel": type_visuel, "mode_visuel": mode_visuel,
         })
+        # Sauvegarde progressive : si le job meurt à la scène suivante,
+        # les scènes déjà faites ne sont pas perdues.
+        with open(os.path.join(dossier_shard, "manifest.json"), "w",
+                  encoding="utf-8") as _f:
+            json.dump({"shard": shard_index, "scenes": manifest,
+                       "photo_miniature": photo_miniature}, _f,
+                      ensure_ascii=False, indent=2)
     # Copier segments + voix dans le dossier du shard (artefact du job).
     import shutil
     for entree in manifest:
@@ -232,6 +256,7 @@ def stage_assemble(script_path, sujet_path, dossiers_shards,
     from upload import upload, upload_short, calculer_publish_at
     from topics import marquer_publie
 
+    verifier_environnement()
     parametres = charger_parametres()
     dossier_cache = parametres["dossiers"]["cache"]
     os.makedirs(dossier_sortie, exist_ok=True)
@@ -260,10 +285,13 @@ def stage_assemble(script_path, sujet_path, dossiers_shards,
                                    "visuel": entree["visuel"],
                                    "type": entree["type_visuel"]})
     scenes.sort(key=lambda s: s["id"])
-    if len(scenes) != len(script["scenes"]):
-        raise RuntimeError(
-            f"Assemblage incomplet : {len(scenes)} scènes sur "
-            f"{len(script['scenes'])} attendues.")
+    # Garde-fou AVANT tout mix/rendu cher : manifests + fichiers.
+    _manifests = []
+    for dossier in sorted(dossiers_shards):
+        with open(os.path.join(dossier, "manifest.json"),
+                  encoding="utf-8") as _f:
+            _manifests.append(json.load(_f))
+    verifier_manifests(script["scenes"], _manifests)
     segments = [s["segment"] for s in scenes]
     duree_totale = sum(s["duree_reelle_s"] for s in scenes)
     print(f"[rapide] Assemblage : {len(scenes)} scènes, "
@@ -306,6 +334,7 @@ def stage_assemble(script_path, sujet_path, dossiers_shards,
     srt = os.path.join(dossier_sortie, f"{base}.srt")
     generer_srt(scenes, srt)
     assembler(segments, audio_final, video_finale, srt)
+    verifier_rendu(video_finale, duree_totale)
     print(f"[rapide] Vidéo rendue : {video_finale}.")
     params_frames = parametres.get("validation_frames") or {}
     rapport_frames = valider_frames(
@@ -328,6 +357,7 @@ def stage_assemble(script_path, sujet_path, dossiers_shards,
     miniature = os.path.join(dossier_sortie, f"{base}-miniature.jpg")
     make_thumbnail(photo_miniature, meta["miniature"]["texte"], miniature,
                    meta["miniature"].get("emotion", "danger"))
+    verifier_miniature(miniature)
     with open(os.path.join(dossier_sortie, f"{base}-credits.json"), "w",
               encoding="utf-8") as f:
         json.dump({"sujet": sujet, "sources": meta.get("sources", []),
@@ -343,6 +373,7 @@ def stage_assemble(script_path, sujet_path, dossiers_shards,
         video_id = upload(video_finale, miniature, meta, publish_at,
                           parametres["publication"].get("privacy_status",
                                                        "private"))
+        verifier_upload(video_id)
         print(f"[rapide] Vidéo uploadée en privé/planifiée : {video_id}.")
         for short in extraire_shorts(video_finale, script):
             sid = upload_short(short, meta, publish_at)
@@ -381,6 +412,13 @@ def main():
                         if d.startswith("shard-")]
             stage_assemble(args.script, args.sujet, dossiers, args.out,
                            sans_upload=args.no_upload)
+    except EchecGardeFou as e:
+        print(f"GARDEFOU {e.code} : {e.message}", file=sys.stderr)
+        try:
+            ecrire_echec(args.out, e.code, e.message, args.stage)
+        except Exception:
+            pass
+        sys.exit(1)
     except RuntimeError as e:
         print(f"ERREUR : {e}", file=sys.stderr)
         sys.exit(1)
