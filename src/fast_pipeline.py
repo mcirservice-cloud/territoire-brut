@@ -201,14 +201,35 @@ def stage_segments(script_path, shard_index, shard_count, dossier_sortie):
     script = _charger_script(script_path)
     verifier_script(script)
     scenes = decouper_scenes(script["scenes"], shard_count, shard_index)
+    # REPRENDRE : les scènes déjà montées et valides ne sont pas
+    # refaites. On garde leur manifest, on ne traite que le reste.
+    from reprendre import charger_manifest_shard
+    deja = {}
+    man_existant = charger_manifest_shard(dossier_sortie, shard_index)
+    if man_existant:
+        for entree in man_existant.get("scenes", []):
+            seg = entree.get("segment")
+            voix = entree.get("voice_path")
+            if (seg and os.path.exists(seg)
+                    and os.path.getsize(seg) > 0
+                    and voix and os.path.exists(voix)
+                    and os.path.getsize(voix) > 0):
+                deja[entree["id"]] = entree
+    if deja:
+        print(f"[reprendre] Shard {shard_index} : "
+              f"{len(deja)} scène(s) déjà faite(s), reprise.")
+    scenes_a_faire = [sc for sc in scenes if sc["id"] not in deja]
+    scenes = scenes_a_faire
     print(f"[rapide] Shard {shard_index}/{shard_count} : "
-          f"{len(scenes)} scènes.")
+          f"{len(scenes)} scène(s) à faire, {len(deja)} reprise(s).")
     scenes = make_voice(scenes, os.path.join(dossier_cache, "voice"))
     verifier_voix(scenes)
     dossier_shard = os.path.join(dossier_sortie, f"shard-{shard_index}")
     os.makedirs(os.path.join(dossier_cache, "segments"), exist_ok=True)
     os.makedirs(dossier_shard, exist_ok=True)
     manifest, photo_miniature = [], None
+    if man_existant:
+        photo_miniature = man_existant.get("photo_miniature")
     dernier_visuel, dernier_type = None, None
     for s in scenes:
         visuel = s["visuel"]
@@ -262,12 +283,17 @@ def stage_segments(script_path, shard_index, shard_count, dossier_sortie):
             json.dump({"shard": shard_index, "scenes": manifest,
                        "photo_miniature": photo_miniature}, _f,
                       ensure_ascii=False, indent=2)
+    # Fusion reprise : déjà-faites + nouvelles, triées par id.
+    if deja:
+        manifest = sorted(list(deja.values()) + manifest,
+                          key=lambda e: e["id"])
     # Copier segments + voix dans le dossier du shard (artefact du job).
     import shutil
     for entree in manifest:
         for cle in ("segment", "voice_path"):
             dest = os.path.join(dossier_shard, os.path.basename(entree[cle]))
-            shutil.copyfile(entree[cle], dest)
+            if os.path.abspath(entree[cle]) != os.path.abspath(dest):
+                shutil.copyfile(entree[cle], dest)
             entree[cle] = dest
     if photo_miniature:
         dest = os.path.join(dossier_shard, "photo_miniature.jpg")
@@ -314,9 +340,21 @@ def stage_assemble(script_path, sujet_path, dossiers_shards,
         sujet_info = json.load(f)
     sujet, source = sujet_info["sujet"], sujet_info["source"]
 
+    # Correction run #4 : seuls les dossiers avec manifest comptent.
+    from reprendre import dossiers_shards_valides
+    dossiers_shards, ignores = dossiers_shards_valides(dossier_sortie)
+    # dossiers_shards passé en argument est ignoré ici au profit de
+    # la vérification réelle sur disque (même dossier par défaut).
+    if ignores:
+        print(f"[reprendre] Dossiers shard ignorés (sans manifest) : "
+              f"{ignores}")
+    if not dossiers_shards:
+        from gardefous import echec as _echec
+        _echec("G008", "aucun dossier shard avec manifest.json "
+                       "dans output/ : rien à assembler")
     scenes = []
     photo_miniature, credits_assets = None, []
-    for dossier in sorted(dossiers_shards):
+    for dossier in dossiers_shards:
         with open(os.path.join(dossier, "manifest.json"),
                   encoding="utf-8") as f:
             man = json.load(f)
@@ -330,7 +368,7 @@ def stage_assemble(script_path, sujet_path, dossiers_shards,
     scenes.sort(key=lambda s: s["id"])
     # Garde-fou AVANT tout mix/rendu cher : manifests + fichiers.
     _manifests = []
-    for dossier in sorted(dossiers_shards):
+    for dossier in dossiers_shards:
         with open(os.path.join(dossier, "manifest.json"),
                   encoding="utf-8") as _f:
             _manifests.append(json.load(_f))
@@ -433,11 +471,41 @@ def stage_assemble(script_path, sujet_path, dossiers_shards,
     return video_finale
 
 
+def stage_reprendre(dossier_sortie, shard_count=10):
+    """Reprend EXACTEMENT là où le dernier run s'est arrêté.
+
+    - Script/sujet déjà là : on ne régénère rien.
+    - Shards terminés : on ne les relance pas.
+    - Shards manquants : on ne refait que ceux-là.
+    - Puis assemble + livraison de la vraie vidéo.
+    """
+    from reprendre import etat_reprise
+    etat = etat_reprise(dossier_sortie, shard_count)
+    print(f"[reprendre] État : script={etat['script']}, "
+          f"sujet={etat['sujet']}, shards terminés="
+          f"{etat['shards_termines']}, manquants="
+          f"{etat['shards_manquants']}.")
+    if not (etat["script"] and etat["sujet"]):
+        print("[reprendre] Script manquant : prepare ALPHA/BÉTA.")
+        stage_prepare()
+    for shard_index in etat["shards_manquants"]:
+        print(f"[reprendre] Shard {shard_index} manquant : on le fait.")
+        stage_segments(os.path.join(dossier_sortie, "script.json"),
+                       shard_index, shard_count, dossier_sortie)
+    dossiers = [os.path.join(dossier_sortie, d)
+                for d in sorted(os.listdir(dossier_sortie))
+                if d.startswith("shard-")]
+    return stage_assemble(os.path.join(dossier_sortie, "script.json"),
+                          os.path.join(dossier_sortie, "sujet.json"),
+                          dossiers, dossier_sortie)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Varus rapide : prepare / segments / assemble.")
     parser.add_argument("--stage", required=True,
-                        choices=["prepare", "segments", "assemble"])
+                        choices=["prepare", "segments", "assemble",
+                                 "reprendre"])
     parser.add_argument("--topic", help="Forcer un sujet (prepare).")
     parser.add_argument("--script", default="output/script.json")
     parser.add_argument("--sujet", default="output/sujet.json")
@@ -450,6 +518,8 @@ def main():
     try:
         if args.stage == "prepare":
             stage_prepare(sujet_nom=args.topic)
+        elif args.stage == "reprendre":
+            stage_reprendre(args.out, args.shard_count)
         elif args.stage == "segments":
             stage_segments(args.script, args.shard_index,
                            args.shard_count, args.out)
@@ -468,6 +538,20 @@ def main():
         sys.exit(1)
     except RuntimeError as e:
         print(f"ERREUR : {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        # Correction run #4 : une erreur inattendue (fichier manquant,
+        # clé absente, etc.) ne doit PLUS mourir sans code lisible
+        # en 1 seconde. On l'écrit avec le code G013 + la trace.
+        import traceback
+        print(f"GARDEFOU G013 : erreur inattendue : {e}",
+              file=sys.stderr)
+        traceback.print_exc()
+        try:
+            ecrire_echec(args.out, "G013",
+                         f"{type(e).__name__}: {e}", args.stage)
+        except Exception:
+            pass
         sys.exit(1)
 
 
