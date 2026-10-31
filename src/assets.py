@@ -327,63 +327,66 @@ def _formes_courtes(requete):
 
 
 def trouver_visuel(requete, alternative=None, budget_s=BUDGET_VISUEL_SCENE_S):
-    """Visuel pour une scène : clip vidéo d'abord, sinon photo animée.
-    Ordre : vidéo Wikimedia, Pixabay, Pexels (si clés), puis photo
-    Openverse, Wikimedia, Pixabay, Pexels. Renvoie (chemin, type).
-    Un fournisseur en panne est simplement ignoré (on passe au suivant).
-    Formes courtes seulement (complète, 3 mots, 1 mot), puis requête
-    alternative si elle existe. Les clips vidéo ne sont cherchés que
-    sur la forme complète : dans le run #13, toutes les scènes ont
-    fini en photo, les recherches vidéo sur les formes simplifiées
-    ne faisaient que perdre du temps.
-    Budget : la recherche s'arrête après budget_s secondes (défaut 120)
-    et renvoie (None, None) avec un log clair — mieux vaut un échec
-    rapide et lisible qu'une recherche qui mange le budget du job."""
+    """Visuel pour une scène : VRAIE VIDÉO D'ABORD, photo ensuite.
+    Changement « montage pro » (Sam, 2026-10-31) : l'ancien ordre
+    cherchait la photo dès que la vidéo manquait sur la forme
+    complète — résultat, au run #13, toutes les scènes ont fini en
+    photo alors qu'une vidéo existait sous une forme simplifiée
+    (souvent le seul nom de l'animal). Désormais deux passes :
+    passe 1 = vidéo sur toutes les formes (complète, 3 mots, 1 mot,
+    puis formes de l'alternative) ; passe 2 = photo seulement si
+    AUCUNE vidéo n'a été trouvée. Une scène sans vidéo reste
+    possible, mais ce n'est plus jamais le premier choix.
+    Budget : la recherche s'arrête après budget_s secondes et
+    renvoie (None, None) avec un log clair."""
     requetes = _formes_courtes(requete)
     if alternative:
         requetes += _formes_courtes(alternative)
     vues = set()
-    echeance = time.monotonic() + budget_s
+    requetes_uniques = []
     for req in requetes:
-        if req in vues:
-            continue
-        vues.add(req)
+        if req not in vues:
+            vues.add(req)
+            requetes_uniques.append(req)
+    echeance = time.monotonic() + budget_s
+
+    def _essayer(fonctions, req):
+        for fonction in fonctions:
+            if time.monotonic() > echeance:
+                return None
+            try:
+                chemin = fonction(req)
+            except Exception as exc:
+                print(f"[visuel] {fonction.__name__} « {req} » : "
+                      f"{type(exc).__name__}")
+                continue
+            if chemin:
+                return chemin
+        return None
+
+    # Passe 1 : vraie vidéo, toutes formes.
+    for req in requetes_uniques:
         if time.monotonic() > echeance:
             print(f"[visuel] Budget de recherche dépassé ({budget_s}s) "
                   f"pour « {requete} » : abandon de la recherche.")
             break
         if req != requete:
-            print(f"[visuel] Aucun résultat pour la forme précédente, "
-                  f"essai simplifié : « {req} »")
-        # Vidéo seulement sur la forme complète (voir docstring).
-        fonctions_video = (wikimedia_video, pixabay_video, pexels_video) \
-            if req == requete else ()
-        for fonction in fonctions_video:
-            if time.monotonic() > echeance:
-                break
-            try:
-                chemin = fonction(req)
-            except Exception as exc:
-                # Plus jamais silencieux : la cause réelle (429, timeout,
-                # panne fournisseur) doit apparaître dans le journal du
-                # run, sinon le diagnostic suivant est impossible.
-                print(f"[visuel] {fonction.__name__} « {req} » : "
-                      f"{type(exc).__name__}")
-                continue
-            if chemin:
-                return chemin, "video"
-        for fonction in (openverse_photo, wikimedia_photo,
-                         pixabay_photo, pexels_photo):
-            if time.monotonic() > echeance:
-                break
-            try:
-                chemin = fonction(req)
-            except Exception as exc:
-                print(f"[visuel] {fonction.__name__} « {req} » : "
-                      f"{type(exc).__name__}")
-                continue
-            if chemin:
-                return chemin, "photo"
+            print(f"[visuel] Vidéo cherchée sous forme simplifiée : "
+                  f"« {req} »")
+        chemin = _essayer((wikimedia_video, pixabay_video, pexels_video),
+                          req)
+        if chemin:
+            return chemin, "video"
+    # Passe 2 : photo seulement, aucune vidéo trouvée.
+    for req in requetes_uniques:
+        if time.monotonic() > echeance:
+            print(f"[visuel] Budget de recherche dépassé ({budget_s}s) "
+                  f"pour « {requete} » : abandon de la recherche.")
+            break
+        chemin = _essayer((openverse_photo, wikimedia_photo,
+                           pixabay_photo, pexels_photo), req)
+        if chemin:
+            return chemin, "photo"
     return None, None
 
 

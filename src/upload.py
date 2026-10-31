@@ -12,6 +12,11 @@ from datetime import datetime, timedelta, timezone
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+try:
+    from googleapiclient.errors import HttpError
+except Exception:  # modules Google simulés dans les tests
+    class HttpError(Exception):
+        pass
 from googleapiclient.http import MediaFileUpload
 
 CATEGORIE_ANIMAUX = "15"
@@ -67,9 +72,24 @@ def upload(video, miniature, meta, publish_at_iso=None,
         _statut, resp = req.next_chunk(num_retries=5)
     video_id = resp["id"]
     if miniature and os.path.exists(miniature):
-        yt.thumbnails().set(
-            videoId=video_id,
-            media_body=MediaFileUpload(miniature)).execute()
+        # CORRECTIF reprise n° 6 : un compte YouTube non vérifié pour
+        # les miniatures personnalisées renvoie 403 sur thumbnails.set.
+        # La vidéo est DÉJÀ envoyée à ce stade : un refus de miniature
+        # ne doit plus tuer toute la livraison. On signale et on
+        # continue avec la miniature automatique de YouTube ; la
+        # miniature personnalisée pourra être posée dans Studio une
+        # fois le compte vérifié.
+        try:
+            yt.thumbnails().set(
+                videoId=video_id,
+                media_body=MediaFileUpload(miniature)).execute()
+        except HttpError as e:
+            if getattr(e, "resp", None) is not None and e.resp.status == 403:
+                print(f"[upload] Miniature refusée (403, compte non "
+                      f"vérifié pour les miniatures) : vidéo {video_id} "
+                      f"conservée sans miniature personnalisée.")
+            else:
+                raise
     return video_id
 
 
