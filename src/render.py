@@ -41,6 +41,8 @@ def assembler(segments, audio, sortie, sous_titres=None):
     montage final : léger débruitage (hqdn3d), renforcement de la netteté
     (unsharp) et mise à l'échelle 1080p en lanczos.
     """
+    if os.path.dirname(sortie):
+        os.makedirs(os.path.dirname(sortie), exist_ok=True)
     liste = sortie + ".txt"
     with open(liste, "w", encoding="utf-8") as f:
         for seg in segments:
@@ -134,6 +136,8 @@ def assembler_rapide(segments, audio, sortie):
     audio mixé en AAC. Secondes au lieu de minutes, même 1080p.
     Les sous-titres restent dans le fichier .srt séparé, pas brûlés.
     """
+    if os.path.dirname(sortie):
+        os.makedirs(os.path.dirname(sortie), exist_ok=True)
     liste = sortie + ".txt"
     with open(liste, "w", encoding="utf-8") as f:
         for seg in segments:

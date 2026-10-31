@@ -60,7 +60,10 @@ def _duree_media(chemin):
 
 
 def verifier_environnement():
-    """G012 : ffmpeg + disque, en secondes, avant tout travail cher."""
+    """G012 : ffmpeg + disque + dépendances, en secondes, avant tout
+    travail cher."""
+    from dependances import exiger_dependances
+    exiger_dependances()
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
         echec("G012", "ffmpeg/ffprobe introuvable dans l'environnement")
     try:

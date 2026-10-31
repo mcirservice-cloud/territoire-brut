@@ -110,6 +110,9 @@ def mode_dry_run():
 
 def _boucler_audio(entree, duree_s, sortie):
     """Boucle un fichier audio jusqu'à la durée voulue (borné)."""
+    import os as _os
+    if _os.path.dirname(sortie):
+        _os.makedirs(_os.path.dirname(sortie), exist_ok=True)
     from exec_utils import run as run_cmd
     run_cmd(["ffmpeg", "-y", "-stream_loop", "-1", "-i", entree,
              "-t", str(duree_s), "-c", "copy", sortie], timeout=300)

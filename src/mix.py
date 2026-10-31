@@ -18,6 +18,9 @@ def mix_audio(voix, musique, ambiance, sortie, sfx=None,
               musique_vol=MUSIQUE_VOLUME, ambiance_vol=AMBIANCE_VOLUME):
     """voix / musique / ambiance = chemins de pistes complètes.
     sfx = liste de (chemin, delai_s, volume)."""
+    import os as _os
+    if _os.path.dirname(sortie):
+        _os.makedirs(_os.path.dirname(sortie), exist_ok=True)
     entrees = ["-i", voix]
     if musique:
         entrees += ["-i", musique]

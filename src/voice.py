@@ -131,6 +131,15 @@ def make_voice(scenes, dossier="cache/voice"):
 
 def concatener_voix(scenes, sortie):
     """Concatène toutes les voix en une seule piste (fichier liste FFmpeg)."""
+    # CORRECTIF run #4 + reprise #1 (G013, échec en 0-1 s) : dans un
+    # job assemble frais, le dossier cache/ n'existe pas encore.
+    # Écrire la liste dans un dossier inexistant plantait avant tout
+    # rendu. On crée les dossiers parents, toujours.
+    import os as _os
+    for _chemin in (sortie, sortie + ".txt"):
+        _dossier = _os.path.dirname(_chemin)
+        if _dossier:
+            _os.makedirs(_dossier, exist_ok=True)
     liste = sortie + ".txt"
     with open(liste, "w", encoding="utf-8") as f:
         for s in scenes:

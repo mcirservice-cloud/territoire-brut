@@ -329,6 +329,18 @@ def stage_assemble(script_path, sujet_path, dossiers_shards,
     parametres = charger_parametres()
     dossier_cache = parametres["dossiers"]["cache"]
     os.makedirs(dossier_sortie, exist_ok=True)
+    # CORRECTIF G013 : le job assemble est frais, cache/ n'existe
+    # pas. Sans ce dossier, concatener_voix plantait en 0 s.
+    os.makedirs(dossier_cache, exist_ok=True)
+    os.makedirs(os.path.join(dossier_cache, "segments"), exist_ok=True)
+    os.makedirs(os.path.join(dossier_cache, "voice"), exist_ok=True)
+    # Auto-maintenance : répare dossiers, script, manifests AVANT
+    # tout mix/rendu, au lieu de mourir sur un détail réparable.
+    from auto_correcteur import maintenance
+    rapport = maintenance(dossier_sortie, dossier_cache)
+    if rapport["corrections"]:
+        print(f"[auto-correcteur] {len(rapport['corrections'])} "
+              f"correction(s) : {rapport['corrections'][:5]}")
     cp = Checkpoint(dossier_sortie)
     manquantes_yt = [c for c in
                      ("YT_CLIENT_ID", "YT_CLIENT_SECRET", "YT_REFRESH_TOKEN")
