@@ -70,6 +70,7 @@ jobs:
           python3 tests/test_plan_b.py
           python3 tests/test_reprendre.py
           python3 tests/test_auto_correcteur.py
+          python3 tests/test_mix.py
 
       - name: Produire la vidéo
         env:
