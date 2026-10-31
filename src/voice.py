@@ -130,7 +130,17 @@ def make_voice(scenes, dossier="cache/voice"):
 
 
 def concatener_voix(scenes, sortie):
-    """Concatène toutes les voix en une seule piste (fichier liste FFmpeg)."""
+    """Concatène toutes les voix en une seule piste (fichier liste FFmpeg).
+
+    CORRECTIF reprise n° 3 (G009) : duree_reelle_s inclut une pause de
+    PAUSE_ENTRE_SCENES_S (0,4 s) par scène, et les segments vidéo sont
+    rendus à cette durée. Avant, la concaténation collait les voix brutes
+    sans pause : la piste audio finale faisait ~9,7 s de moins que la
+    vidéo pour 24 scènes, l'option -shortest du montage coupait la fin
+    de la vidéo, et le garde-fou G009 bloquait la publication à juste
+    titre. On insère donc un silence de 0,4 s après chaque scène, pour
+    que la piste audio dure exactement la somme des duree_reelle_s.
+    """
     # CORRECTIF run #4 + reprise #1 (G013, échec en 0-1 s) : dans un
     # job assemble frais, le dossier cache/ n'existe pas encore.
     # Écrire la liste dans un dossier inexistant plantait avant tout
@@ -140,10 +150,20 @@ def concatener_voix(scenes, sortie):
         _dossier = _os.path.dirname(_chemin)
         if _dossier:
             _os.makedirs(_dossier, exist_ok=True)
+    # Silence de pause, mêmes paramètres que les voix Kokoro
+    # (MP3, 24 kHz, mono) pour que la concaténation -c copy passe.
+    dossier = os.path.dirname(sortie) or "."
+    silence = os.path.join(dossier, "silence_pause.mp3")
+    if not os.path.exists(silence):
+        run_cmd(["ffmpeg", "-y", "-f", "lavfi", "-i",
+                 f"anullsrc=r=24000:cl=mono", "-t",
+                 str(PAUSE_ENTRE_SCENES_S), "-codec:a", "libmp3lame",
+                 "-q:a", "4", silence], timeout=60)
     liste = sortie + ".txt"
     with open(liste, "w", encoding="utf-8") as f:
         for s in scenes:
             f.write(f"file '{os.path.abspath(s['voice_path'])}'\n")
+            f.write(f"file '{os.path.abspath(silence)}'\n")
     run_cmd(["ffmpeg", "-y", "-f", "concat", "-safe", "0",
              "-i", liste, "-c", "copy", sortie], timeout=180)
     return sortie
