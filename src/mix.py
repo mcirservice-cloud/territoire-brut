@@ -31,19 +31,38 @@ def mix_audio(voix, musique, ambiance, sortie, sfx=None,
         entrees += ["-i", chemin]
 
     # Indices : 0=voix, 1=musique, 2=ambiance, 3..=sfx
-    filtres = ["[0:a]asplit=3[v1][v2][v3]"]
-    pistes = ["[v3]"]
+    # CORRECTIF reprise n° 2 (G013 ffmpeg asplit) : on ne divise la voix
+    # qu'en autant de branches que nécessaire. Avant, asplit=3 était
+    # systématique : sans musique ni ambiance, les sorties [v1] et [v2]
+    # restaient non connectées et ffmpeg refusait ("unconnected output",
+    # exit 234), ce qui tuait l'assemblage en 6 s.
+    branches = []
+    if musique:
+        branches.append("musique")
+    if ambiance:
+        branches.append("ambiance")
+    branches.append("mix")
+    nb = len(branches)
+    if nb == 1:
+        filtres, voix_mix = [], "[0:a]"
+    else:
+        filtres = ["[0:a]asplit=%d%s" % (
+            nb, "".join("[v%d]" % (i + 1) for i in range(nb)))]
+        voix_mix = "[v%d]" % nb
+    pistes = [voix_mix]
     idx = 1
     if musique:
+        cle = "[v%d]" % (branches.index("musique") + 1)
         filtres.append(f"[{idx}:a]volume={musique_vol}[m]")
-        filtres.append("[m][v1]sidechaincompress=threshold=0.04:ratio=10"
-                       ":attack=15:release=450[mduck]")
+        filtres.append("[m]%ssidechaincompress=threshold=0.04:ratio=10"
+                       ":attack=15:release=450[mduck]" % cle)
         pistes.append("[mduck]")
         idx += 1
     if ambiance:
+        cle = "[v%d]" % (branches.index("ambiance") + 1)
         filtres.append(f"[{idx}:a]volume={ambiance_vol}[a]")
-        filtres.append("[a][v2]sidechaincompress=threshold=0.04:ratio=6"
-                       ":attack=15:release=450[aduck]")
+        filtres.append("[a]%ssidechaincompress=threshold=0.04:ratio=6"
+                       ":attack=15:release=450[aduck]" % cle)
         pistes.append("[aduck]")
         idx += 1
     for chemin, delai, volume in sfx:
