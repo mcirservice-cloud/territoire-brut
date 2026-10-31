@@ -125,3 +125,21 @@ def valider_frames(video, echantillons=ECHANTILLONS_DEFAUT,
         rapport["raison"] = (f"{noires}/{len(decodables)} frames quasi "
                              "noires — rendu probablement invalide")
     return rapport
+
+
+def assembler_rapide(segments, audio, sortie):
+    """Montage final rapide : les segments sont DÉJÀ montés en
+    parallèle par les shards (voix + visuel + animation par scène).
+    Le final n'est qu'un collage : copie vidéo sans ré-encodage,
+    audio mixé en AAC. Secondes au lieu de minutes, même 1080p.
+    Les sous-titres restent dans le fichier .srt séparé, pas brûlés.
+    """
+    liste = sortie + ".txt"
+    with open(liste, "w", encoding="utf-8") as f:
+        for seg in segments:
+            f.write(f"file '{os.path.abspath(seg)}'\n")
+    cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", liste,
+           "-i", audio, "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+           "-shortest", "-movflags", "+faststart", sortie]
+    run_cmd(cmd, timeout=600)
+    return sortie

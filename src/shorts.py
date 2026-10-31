@@ -4,6 +4,7 @@ dans le script (meta "shorts" : ids_scenes + accroche).
 """
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 from exec_utils import check_output, run as run_cmd
 
@@ -47,3 +48,40 @@ def extraire_shorts(video, script, dossier="output/shorts"):
                  "-c:a", "aac", sortie], timeout=600)
         sorties.append(sortie)
     return sorties
+
+
+def extraire_shorts_parallele(video, script, dossier="output/shorts"):
+    """Les 3 Shorts extraits EN MÊME TEMPS (3 FFmpeg en parallèle),
+    au lieu d'un après l'autre."""
+    os.makedirs(dossier, exist_ok=True)
+    scenes = {s["id"]: s for s in script["scenes"]}
+    debuts, t = {}, 0.0
+    for s in script["scenes"]:
+        debuts[s["id"]] = t
+        t += s.get("duree_reelle_s", s.get("duree_estimee_s", 8))
+
+    def _un_short(args):
+        i, short = args
+        ids = short.get("ids_scenes", [])
+        if not ids:
+            return None
+        debut = debuts[ids[0]]
+        fin = debuts[ids[-1]] + scenes[ids[-1]].get(
+            "duree_reelle_s", scenes[ids[-1]].get("duree_estimee_s", 8))
+        duree = min(fin - debut, 45)
+        if duree < 25:
+            return None
+        sortie = os.path.join(dossier, f"short_{i}.mp4")
+        vf = (f"scale={LARGEUR}:{HAUTEUR}:force_original_aspect_ratio=increase,"
+              f"crop={LARGEUR}:{HAUTEUR},fps=25,format=yuv420p")
+        run_cmd(["ffmpeg", "-y", "-ss", str(debut), "-i", video,
+                 "-t", str(duree), "-vf", vf,
+                 "-c:v", "libx264", "-preset", "fast",
+                 "-c:a", "aac", sortie], timeout=600)
+        return sortie
+
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        resultats = list(ex.map(
+            _un_short,
+            list(enumerate(script.get("shorts", [])[:3], 1))))
+    return [r for r in resultats if r]

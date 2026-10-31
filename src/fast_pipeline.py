@@ -45,6 +45,29 @@ def decouper_scenes(scenes, shard_count, shard_index):
             if (s["id"] - 1) % shard_count == shard_index]
 
 
+def _avec_delai(fonction, delai_s, nom):
+    """Exécute fonction avec un délai dur : au-delà, TimeoutError.
+    Le thread est daemon : abandonné proprement à la fin du job,
+    on ne reste JAMAIS bloqué sur un appel LLM lent."""
+    import threading
+    resultat, erreur = {}, {}
+
+    def _cible():
+        try:
+            resultat["v"] = fonction()
+        except Exception as e:
+            erreur["e"] = e
+
+    th = threading.Thread(target=_cible, daemon=True)
+    th.start()
+    th.join(delai_s)
+    if th.is_alive():
+        raise TimeoutError(f"{nom} : délai {delai_s}s dépassé, abandon")
+    if "e" in erreur:
+        raise erreur["e"]
+    return resultat.get("v")
+
+
 def stage_prepare(sujet_nom=None):
     from checkpoint import Checkpoint
     from facts import fetch_facts
@@ -53,6 +76,8 @@ def stage_prepare(sujet_nom=None):
                             corriger_et_reverifier,
                             retirer_scenes_signalees)
     from topics import prochain_sujet, lire_csv
+    from plan_b import construire_script_secours, completer_script
+    import time
 
     verifier_environnement()
     parametres = charger_parametres()
@@ -86,58 +111,76 @@ def stage_prepare(sujet_nom=None):
     sfx_autorises, ambiances_autorisees = charger_bibliotheques()
     prompt = construire_prompt(modele_prompt, sujet, faits,
                                sfx_autorises, ambiances_autorisees)
-    script = generate_script(prompt, sfx_autorises, ambiances_autorisees)
-    verifier_script(script, duree_cible_min=sujet.get("duree"))
-    print(f"[rapide] Script : {len(script['scenes'])} scènes, "
-          f"titre « {script['meta']['titre']} ».")
+    # ── ALPHA ou BÉTA, obligatoirement une vidéo à la fin ──
+    # Erreur du chemin lancé (run #3) : script + fact-check ALPHA
+    # pouvaient prendre plus de 15 min (jusqu'à 9 appels LLM en
+    # fact-check), le job GitHub était annulé avant les segments.
+    # Correction : ALPHA borné (8 min script, 4 min fact-check,
+    # 1 seule tentative de correction en chemin rapide), puis BÉTA
+    # instantané (faits directs, aucun appel LLM, aucune invention).
+    debut_prepare = time.monotonic()
+    chemin = "alpha"
+    try:
+        script = _avec_delai(
+            lambda: generate_script(prompt, sfx_autorises,
+                                    ambiances_autorisees),
+            480, "script ALPHA")
+        verifier_script(script, duree_cible_min=sujet.get("duree"))
+        print(f"[rapide] Script ALPHA : {len(script['scenes'])} scènes, "
+              f"titre « {script['meta']['titre']} ».")
+    except Exception as e:
+        print(f"[rapide] ALPHA script impossible ({e}) : bascule BÉTA.")
+        script = construire_script_secours(faits, sujet)
+        chemin = "beta"
     cp.sauver_script(script)
     cp.etape("script", {"scenes": len(script["scenes"]),
-                        "titre": script["meta"]["titre"]})
+                        "titre": script["meta"]["titre"],
+                        "chemin": chemin})
 
-    with open("config/prompts/fact_check.txt", encoding="utf-8") as f:
-        prompt_check = f.read()
-    resultat = fact_check(script, faits, prompt_check)
-    nb_problemes = appliquer_fact_check(script, resultat)
-    cp.etape("fact_check_initial",
-             {"verdict": resultat.get("verdict"),
-              "problemes": nb_problemes})
-    scenes_a_verifier = [s["id"] for s in script["scenes"]
-                         if s.get("a_verifier")]
-    journal_corr = []
-    if scenes_a_verifier:
-        print(f"[rapide] Fact-check : {nb_problemes} problème(s). "
-              "Correction automatique...")
-        max_tentatives = (parametres.get("fact_check") or {}).get(
-            "correction_max_tentatives", 4)
-        scenes_a_verifier, journal_corr = corriger_et_reverifier(
-            script, faits, prompt_check, resultat,
-            max_tentatives=max_tentatives)
-        cp.sauver_script(script)
-        cp.etape("correction",
-                 {"tentatives": journal_corr,
-                  "scenes_restantes": scenes_a_verifier})
-    if scenes_a_verifier:
-        retires = retirer_scenes_signalees(script, scenes_a_verifier)
-        if retires:
+    if chemin == "alpha":
+        try:
+            with open("config/prompts/fact_check.txt",
+                      encoding="utf-8") as f:
+                prompt_check = f.read()
+
+            def _fact_check_alpha():
+                resultat = fact_check(script, faits, prompt_check)
+                nb = appliquer_fact_check(script, resultat)
+                journal = []
+                restants = [s["id"] for s in script["scenes"]
+                            if s.get("a_verifier")]
+                # Chemin rapide : 1 seule tentative (pas 4) ; le
+                # BÉTA complète ensuite, au lieu de brûler 9 appels.
+                if restants:
+                    restants, journal = corriger_et_reverifier(
+                        script, faits, prompt_check, resultat,
+                        max_tentatives=1)
+                return restants, journal
+
+            scenes_a_verifier, journal_corr = _avec_delai(
+                _fact_check_alpha, 240, "fact-check ALPHA")
+            if scenes_a_verifier:
+                print(f"[rapide] Fact-check : scènes signalées "
+                      f"{scenes_a_verifier} -> complétées par BÉTA.")
+                script = completer_script(script, faits, sujet)
+                chemin = "alpha+beta"
+                cp.sauver_script(script)
+                cp.etape("beta_completion",
+                         {"scenes_restantes": len(script["scenes"])})
+        except Exception as e:
+            # Fact-check impossible : on ne publie PAS une narration
+            # non vérifiée. On bascule entièrement sur le BÉTA,
+            # dont les phrases sont les faits eux-mêmes.
+            print(f"[rapide] Fact-check impossible ({e}) : "
+                  f"bascule BÉTA complète.")
+            script = construire_script_secours(faits, sujet)
+            chemin = "beta"
             cp.sauver_script(script)
-            cp.etape("scenes_retirees_fact_check",
-                     {"retirees": retires,
-                      "scenes_restantes": len(script["scenes"]),
-                      "tentatives_correction": journal_corr})
-            print(f"[rapide] Scènes retirées {retires}, "
-                  f"{len(script['scenes'])} scènes restantes.")
-        else:
-            cp.sauver_blocage(
-                script, scenes_a_verifier,
-                resultat.get("problemes", []),
-                {"sujet": sujet["nom"], "source": source,
-                 "tentatives_correction": journal_corr,
-                 "faits_caracteres": len(faits)})
-            raise EchecGardeFou(
-                "G005",
-                "Publication bloquée : scènes à vérifier : "
-                f"{scenes_a_verifier}. TOUT est sauvegardé.")
+            cp.etape("script_beta", {"scenes": len(script["scenes"])})
     verifier_scenes_min(script["scenes"])
+    print(f"[rapide] Prepare terminé en "
+          f"{time.monotonic() - debut_prepare:.0f}s : "
+          f"{len(script['scenes'])} scènes, chemin {chemin}.")
     # Le sujet est conservé avec le script pour l'étape assemble.
     with open(os.path.join(dossier_sortie, "sujet.json"), "w",
               encoding="utf-8") as f:
@@ -250,9 +293,9 @@ def stage_assemble(script_path, sujet_path, dossiers_shards,
     from voice import concatener_voix
     from assets import trouver_son, trouver_musique
     from mix import mix_audio
-    from render import generer_srt, assembler, valider_frames
+    from render import generer_srt, assembler_rapide, valider_frames
     from thumbnail import make_thumbnail
-    from shorts import extraire_shorts
+    from shorts import extraire_shorts_parallele
     from upload import upload, upload_short, calculer_publish_at
     from topics import marquer_publie
 
@@ -333,7 +376,11 @@ def stage_assemble(script_path, sujet_path, dossiers_shards,
     video_finale = os.path.join(dossier_sortie, f"{base}.mp4")
     srt = os.path.join(dossier_sortie, f"{base}.srt")
     generer_srt(scenes, srt)
-    assembler(segments, audio_final, video_finale, srt)
+    # Montage EN MÊME TEMPS : les segments sont déjà montés en
+    # parallèle par les shards ; le final est un collage sans
+    # ré-encodage (secondes, pas minutes). Les sous-titres restent
+    # dans le .srt séparé.
+    assembler_rapide(segments, audio_final, video_finale)
     verifier_rendu(video_finale, duree_totale)
     print(f"[rapide] Vidéo rendue : {video_finale}.")
     params_frames = parametres.get("validation_frames") or {}
@@ -375,7 +422,7 @@ def stage_assemble(script_path, sujet_path, dossiers_shards,
                                                        "private"))
         verifier_upload(video_id)
         print(f"[rapide] Vidéo uploadée en privé/planifiée : {video_id}.")
-        for short in extraire_shorts(video_finale, script):
+        for short in extraire_shorts_parallele(video_finale, script):
             sid = upload_short(short, meta, publish_at)
             print(f"[rapide] Short uploadé : {sid}.")
     cp.sauver_script(script)
