@@ -42,6 +42,7 @@ jobs:
           python3 tests/test_reprendre.py
           python3 tests/test_auto_correcteur.py
           python3 tests/test_mix.py
+          python3 tests/test_concat_voix.py
       - name: Préparer script + fact-check
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
