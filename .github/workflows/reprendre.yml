@@ -71,6 +71,8 @@ jobs:
           python3 tests/test_auto_correcteur.py
           python3 tests/test_mix.py
           python3 tests/test_concat_voix.py
+          python3 tests/test_upload_miniature.py
+          python3 tests/test_montage_pro.py
       - name: Reprendre et livrer
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
