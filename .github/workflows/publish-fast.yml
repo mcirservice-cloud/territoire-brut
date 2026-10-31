@@ -38,6 +38,9 @@ jobs:
           python3 tests/test_fast_pipeline.py
           python3 tests/test_gardefous.py
           python3 tests/test_openrouter_first.py
+          python3 tests/test_plan_b.py
+          python3 tests/test_reprendre.py
+          python3 tests/test_auto_correcteur.py
       - name: Préparer script + fact-check
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

@@ -68,6 +68,7 @@ jobs:
           python3 tests/test_openrouter_first.py
           python3 tests/test_plan_b.py
           python3 tests/test_reprendre.py
+          python3 tests/test_auto_correcteur.py
       - name: Reprendre et livrer
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
